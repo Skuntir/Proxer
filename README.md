@@ -1,0 +1,127 @@
+# Proxer
+
+Proxer is a desktop HTTP and HTTPS interception proxy built with Tauri v2 and a Next.js UI. It captures traffic into a local SQLite database, shows it in a real-time History view, and builds a Sitemap from observed endpoints.
+
+The app is designed for security testing workflows and includes interception, replay, and scanning features.
+
+## Features
+
+- HTTP and HTTPS proxy with CONNECT support
+- Optional TLS interception for HTTPS visibility
+- HTTP History with request and response details
+- Sitemap view that groups traffic by host and endpoint
+- Request interception with scope gating
+- Built-in tools: Repeater, Intruder, Scanner, Decoder, Comparer, Logger, and Extensions
+- Light and dark themes with color and grayscale variants
+- Windows system proxy toggle with automatic restore on stop
+- Local persistence via SQLite
+
+## Screens and Navigation
+
+Main navigation is:
+
+- Dashboard
+- HTTP History
+- Sitemap
+- Intercept
+- Proxy
+
+## How it works
+
+1. The proxy listens on a local address, usually 127.0.0.1:8080.
+2. For HTTP requests, the proxy can capture full request and response data.
+3. For HTTPS requests, the browser first creates a CONNECT tunnel. You can capture the tunnel destination without decrypting it.
+4. If you enable TLS interception and install the generated CA certificate, Proxer can decrypt HTTPS traffic and capture full request and response data.
+5. Captured traffic is stored in a local SQLite database and drives the Dashboard, History, and Sitemap views.
+
+## Install from prebuilt binaries
+
+Prebuilt installers and archives are provided in GitHub Releases.
+
+1. Download the latest release for your operating system.
+2. Install or extract it.
+3. Launch Proxer.
+
+### Browser proxy setup
+
+To capture traffic, configure your browser to use the Proxer proxy listener.
+
+- Host: 127.0.0.1
+- Port: 8080, or the port you configured in the Proxy view
+
+### HTTPS interception setup
+
+To see HTTPS request and response contents:
+
+1. Open Proxy.
+2. Enable SSL Interception.
+3. Export the CA certificate.
+4. Install the CA certificate in your browser or operating system trust store.
+
+If you do not install the CA, HTTPS traffic will typically appear as CONNECT tunnels only.
+
+## Build from source
+
+Proxer uses:
+
+- Node.js and npm for the Next.js frontend
+- Rust toolchain for the Tauri backend
+
+### Prerequisites
+
+- Node.js 18 or newer
+- Rust stable toolchain
+- Tauri v2 prerequisites for your platform
+
+Platform notes:
+
+- Windows: Microsoft C++ Build Tools and WebView2
+- macOS: Xcode Command Line Tools
+- Linux: required system libraries for Tauri and WebKit based webviews, depending on your distribution
+
+### Install dependencies
+
+From the repository root:
+
+1. Install frontend dependencies:
+   - `cd frontend`
+   - `npm install`
+2. Build and run via Tauri:
+   - `cd ..\src-tauri` on Windows, or `cd ../src-tauri` on macOS and Linux
+
+### Development build
+
+From `src-tauri`:
+
+- `cargo tauri dev`
+
+This starts the Next.js dev server and launches the Tauri app window.
+
+### Production build
+
+From `src-tauri`:
+
+- `cargo tauri build`
+
+This builds the frontend, exports it, and bundles a native app for your platform.
+
+## Data and privacy
+
+Captured traffic is stored locally. Do not use Proxer on networks or targets that you do not own or have explicit permission to test.
+
+## Repository layout
+
+- `frontend/` Next.js UI
+- `src-tauri/` Tauri backend, proxy engine, and storage
+
+## Troubleshooting
+
+### I only see CONNECT in History
+
+- This is expected for HTTPS without TLS interception and CA installation.
+- Enable SSL Interception in the Proxy view and install the exported CA certificate.
+
+### Other apps stop working when system proxy is enabled
+
+- If Intercept is enabled and the system proxy routes traffic through Proxer, other apps can pause waiting for you to forward or drop, use system proxy ONLY when you want to intercept traffic from desktop apps. Browsers will be intercepted if you change their proxy settings without needing to have system proxy enabled.
+
