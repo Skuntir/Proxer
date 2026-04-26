@@ -1,6 +1,6 @@
 # Proxer
 
-<img width="1983" height="793" alt="78b39bf8-a02a-47c0-9303-78a6a782fe0e" src="https://github.com/user-attachments/assets/ce79f99c-8681-4ee1-90a6-76f375dac656" />
+<img width="1920" height="1080" alt="636_1x_shots_so" src="https://github.com/user-attachments/assets/6cdfca9c-a2fc-4cb3-88c8-fb97e0b07acf" />
 
 
 ## Description
