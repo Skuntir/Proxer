@@ -1,8 +1,11 @@
 # Proxer
 
-Proxer is a desktop HTTP and HTTPS interception proxy built with Tauri v2 and a Next.js UI. It captures traffic into a local SQLite database, shows it in a real-time History view, and builds a Sitemap from observed endpoints.
+<img width="1983" height="793" alt="78b39bf8-a02a-47c0-9303-78a6a782fe0e" src="https://github.com/user-attachments/assets/ce79f99c-8681-4ee1-90a6-76f375dac656" />
 
-The app is designed for security testing workflows and includes interception, replay, and scanning features.
+
+## Description
+
+Proxer is a desktop HTTP and HTTPS interception proxy built with Tauri v2 and a Next.js UI. It captures traffic into a local SQLite database, shows it in a real-time History view, and builds a Sitemap from observed endpoints.
 
 ## Features
 
