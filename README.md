@@ -103,7 +103,26 @@ From `src-tauri`:
 
 - `cargo tauri build`
 
-This builds the frontend, exports it, and bundles a native app for your platform.
+This builds the frontend, exports it to `frontend/out`, and builds a native app.
+
+#### Windows output
+
+On Windows, the build produces:
+
+- A portable app executable at `src-tauri/target/release/proxer.exe`
+- An installer executable at `src-tauri/target/release/bundle/nsis/`
+
+If you only want the portable executable and you do not want an installer:
+
+- `cargo tauri build --no-bundle`
+
+#### macOS output
+
+On macOS, the build produces an app bundle under `src-tauri/target/release/bundle/`. Depending on your setup, it may also produce a DMG.
+
+#### Linux output
+
+On Linux, the build produces bundles under `src-tauri/target/release/bundle/`. The exact artifacts depend on your distribution and your system dependencies.
 
 ## Data and privacy
 
@@ -123,5 +142,4 @@ Captured traffic is stored locally. Do not use Proxer on networks or targets tha
 
 ### Other apps stop working when system proxy is enabled
 
-- If Intercept is enabled and the system proxy routes traffic through Proxer, other apps can pause waiting for you to forward or drop, use system proxy ONLY when you want to intercept traffic from desktop apps. Browsers will be intercepted if you change their proxy settings without needing to have system proxy enabled.
-
+- If Intercept is enabled and the system proxy routes traffic through Proxer, other apps can pause waiting for you to forward or drop. Use system proxy only when you want to intercept traffic from desktop apps. Browsers can be captured by setting a browser proxy without enabling the system proxy.
