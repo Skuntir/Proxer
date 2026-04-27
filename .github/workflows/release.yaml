@@ -49,13 +49,24 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Build frontend (static export)
+        run: npm run build
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Verify exported assets exist
+        run: node -e "require('fs').accessSync('frontend/out/index.html')"
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           projectPath: src-tauri
-          tagName: v__VERSION__
-          releaseName: Proxer v__VERSION__
+          tagName: ${{ github.ref_name }}
+          releaseName: Proxer ${{ github.ref_name }}
           releaseBody: See the assets to download and install this version.
           releaseDraft: true
           prerelease: false
