@@ -45,6 +45,13 @@ Prebuilt installers and archives are provided in GitHub Releases.
 2. Install or extract it.
 3. Launch Proxer.
 
+### Automated releases
+
+This repository includes a GitHub Actions workflow that builds releases for Windows, macOS, and Linux.
+
+- Push a git tag like `v0.1.0` to trigger a draft GitHub Release with the build artifacts attached.
+- Publish the draft release once you have verified the artifacts.
+
 ### Browser proxy setup
 
 To capture traffic, configure your browser to use the Proxer proxy listener.
@@ -108,6 +115,11 @@ From `src-tauri`:
 
 This builds the frontend, exports it to `frontend/out`, and builds a native app.
 
+You can also build from the repository root using the helper scripts:
+
+- Windows: `scripts\\build-windows.bat`
+- macOS and Linux: `scripts/build-unix.sh`
+
 #### Windows output
 
 On Windows, the build produces:
@@ -121,11 +133,18 @@ If you only want the portable executable and you do not want an installer:
 
 #### macOS output
 
-On macOS, the build produces an app bundle under `src-tauri/target/release/bundle/`. Depending on your setup, it may also produce a DMG.
+On macOS, the build produces a DMG under `src-tauri/target/release/bundle/dmg/` and an app bundle under `src-tauri/target/release/bundle/macos/`.
 
 #### Linux output
 
-On Linux, the build produces bundles under `src-tauri/target/release/bundle/`. The exact artifacts depend on your distribution and your system dependencies.
+On Linux, the build produces:
+
+- An AppImage under `src-tauri/target/release/bundle/appimage/`
+- A Debian package under `src-tauri/target/release/bundle/deb/`
+
+#### Building for every OS
+
+`cargo tauri build` builds for the operating system you run it on. To produce Windows, macOS, and Linux artifacts, you must build on each OS, or use CI with a matrix that builds on Windows, macOS, and Linux.
 
 ## Data and privacy
 

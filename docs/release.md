@@ -44,16 +44,20 @@ For distribution outside local development, you will typically need signing and 
 
 ### Linux
 
-Common outputs include AppImage and distribution specific packages, depending on your configuration.
+Common outputs include AppImage and Debian packages.
+
+## Cross platform releases
+
+Tauri does not produce Windows, macOS, and Linux installers from a single build machine by default. To publish releases for all platforms, build on each OS, or use CI with a build matrix.
 
 ## GitHub Releases
 
 Recommended steps:
 
-1. Create a git tag for the release version.
-2. Build artifacts on clean machines for Windows, macOS, and Linux, or use CI.
-3. Create a GitHub Release and upload the artifacts.
-4. Include release notes that summarize user facing changes, fixes, and known issues.
+1. Create and push a git tag for the release version, for example `v0.1.0`.
+2. Let GitHub Actions build the artifacts and create a draft GitHub Release.
+3. Smoke test the artifacts from the draft release.
+4. Publish the release and add release notes that summarize user facing changes, fixes, and known issues.
 
 ## Checklist
 
@@ -63,4 +67,3 @@ Recommended steps:
 - `cargo tauri build` completes on each target platform
 - Installer and app launch smoke tests done
 - Release artifacts uploaded to GitHub Releases
-
