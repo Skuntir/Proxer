@@ -8,7 +8,7 @@ Proxer is a Tauri v2 desktop application:
 
 - Backend: Rust, Tokio, Hyper, and Reqwest
 - Frontend: Next.js, React, TypeScript, and CSS variables for theming
-- Storage: SQLite via sqlx, stored in the OS app data directory
+- Storage: SQLite via sqlx, stored per session or per project
 
 The proxy engine captures HTTP and HTTPS traffic, stores it in SQLite, and emits events so the UI can update in real time.
 
@@ -81,6 +81,13 @@ Traffic is stored in a `traffic` table with:
 - an error field for failures
 
 Dashboard and Sitemap are derived from this traffic dataset.
+
+### Projects and sessions
+
+The backend uses a swappable store handle so the active SQLite database can change at runtime.
+
+- Temporary sessions use a database under the OS temp directory.
+- Projects on disk use a `proxer.db` file at a path chosen by the user.
 
 ### Events and UI updates
 

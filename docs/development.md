@@ -63,9 +63,14 @@ Backend build check:
 
 ## Project data location
 
-Proxer stores its SQLite database under the OS app data directory in a `proxer/` folder.
+Proxer stores captured traffic in SQLite.
 
-If you need a clean state, you can clear traffic from the UI, or you can remove the database file from the app data directory.
+- Temporary sessions use a database under your OS temp directory.
+- Projects on disk use the folder you picked at startup, with a `proxer.db` inside it.
+
+Proxer also stores a small session config in the OS app data directory to remember the most recently opened project path.
+
+If you need a clean state, you can clear traffic from the UI, or you can remove the database file used by the current session or project.
 
 ## Tips
 

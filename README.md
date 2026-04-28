@@ -15,9 +15,10 @@ Proxer is a desktop HTTP and HTTPS interception proxy built with Tauri v2 and a 
 - Sitemap view that groups traffic by host and endpoint
 - Request interception with scope gating
 - Built-in tools: Repeater, Intruder, Scanner, Decoder, Comparer, Logger, and Extensions
+- Sessions and projects: temporary session or project on disk (choose a folder on startup)
 - Light and dark themes with color and grayscale variants
 - Windows system proxy toggle with automatic restore on stop
-- Local persistence via SQLite
+- Local persistence via SQLite per project
 
 ## Screens and Navigation
 
@@ -165,3 +166,8 @@ Captured traffic is stored locally. Do not use Proxer on networks or targets tha
 ### Other apps stop working when system proxy is enabled
 
 - If Intercept is enabled and the system proxy routes traffic through Proxer, other apps can pause waiting for you to forward or drop. Use system proxy only when you want to intercept traffic from desktop apps. Browsers can be captured by setting a browser proxy without enabling the system proxy.
+
+### Where is my project data stored?
+
+- Temporary sessions use a database under your OS temp directory.
+- Projects on disk use the folder you picked at startup, with a `proxer.db` inside it.

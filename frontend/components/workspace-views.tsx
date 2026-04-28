@@ -22,6 +22,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Progress } from '@/components/ui/progress'
 import { applyTheme } from '@/lib/theme'
+import { applyTypography } from '@/lib/typography'
+import { buildLineDiff, type DiffRow } from '@/lib/diff'
 import { cn } from '@/lib/utils'
 import { uiInfo, uiPrompt, uiToastError, uiToastSuccess, uiTwoField } from '@/lib/overlays'
 import {
@@ -37,9 +39,7 @@ import {
   formatBytes,
   formatDurationMs,
   interceptDrop,
-  interceptGetEnabled,
   interceptForward,
-  interceptSetEnabled,
   intruderStart,
   intruderStop,
   logsClear,
@@ -73,6 +73,7 @@ import {
   type Extension,
   type LogEntry,
   type HttpRequest,
+  type IntruderResult,
   type RepeaterSendResult,
   type RuleSpec,
   type ScanStatus,
@@ -439,6 +440,7 @@ export function TargetView() {
   const [textFilter, setTextFilter] = useState('')
   const textFilterRef = useRef<HTMLInputElement | null>(null)
   const [lastCapture, setLastCapture] = useState<HttpRequest | null>(null)
+  const [visualClearAfterMs, setVisualClearAfterMs] = useState<number | null>(null)
 
   const reload = async () => {
     const n = await sitemapGet(2000)
@@ -462,15 +464,24 @@ export function TargetView() {
       setLastCapture(null)
       reload().catch(() => {})
     }
+    const onVisualClear = (ev: Event) => {
+      const e = ev as CustomEvent
+      const ts = typeof e.detail?.tsMs === 'number' ? e.detail.tsMs : Date.now()
+      setVisualClearAfterMs(ts)
+      setSelectedNode(null)
+      setLastCapture(null)
+    }
     onBackendEvent((ev) => {
       if (ev.type === 'RequestCaptured' || ev.type === 'ResponseReceived') {
         reload().catch(() => {})
       }
     }).then((u) => (unlisten = u))
     window.addEventListener('skuntir:traffic-cleared', onCleared)
+    window.addEventListener('skuntir:visual-clear', onVisualClear)
     return () => {
       unlisten?.()
       window.removeEventListener('skuntir:traffic-cleared', onCleared)
+      window.removeEventListener('skuntir:visual-clear', onVisualClear)
     }
   }, [])
 
@@ -504,24 +515,30 @@ export function TargetView() {
 
     const wantScope = scopeFilter !== 'all'
     const wantIn = scopeFilter === 'in-scope'
+    const cutoff = visualClearAfterMs
 
     const filterTree = (n: SitemapNode): SitemapNode | null => {
+      if (cutoff && (n.lastStartedMs ?? 0) > 0 && (n.lastStartedMs ?? 0) < cutoff) {
+        if (!n.children || n.children.length === 0) return null
+      }
       if (wantScope && n.type === 'host') {
         const ok = inScope(n.name)
         if (wantIn ? !ok : ok) return null
       }
 
       if (!n.children || n.children.length === 0) {
+        if (cutoff && (n.lastStartedMs ?? 0) > 0 && (n.lastStartedMs ?? 0) < cutoff) return null
         return matches(n) ? n : null
       }
 
       const children = n.children.map(filterTree).filter(Boolean) as SitemapNode[]
       if (children.length > 0) return { ...n, children }
+      if (cutoff && (n.lastStartedMs ?? 0) > 0 && (n.lastStartedMs ?? 0) < cutoff) return null
       return matches(n) ? { ...n, children: [] } : null
     }
 
     return nodes.map(filterTree).filter(Boolean) as SitemapNode[]
-  }, [nodes, scopeFilter, scopeRegex, textFilter])
+  }, [nodes, scopeFilter, scopeRegex, textFilter, visualClearAfterMs])
 
   const selected = useMemo(() => {
     if (!selectedNode) return null
@@ -893,26 +910,29 @@ export function TargetView() {
   )
 }
 
-export function ProxyView() {
+export function ProxyView({
+  interceptEnabled,
+  onInterceptToggle,
+}: {
+  interceptEnabled: boolean
+  onInterceptToggle: (enabled: boolean) => void
+}) {
   const [proxy, setProxy] = useState<{ running: boolean; bind?: string | null } | null>(null)
   const [mitmEnabled, setMitmEnabled] = useState(false)
-  const [interceptEnabled, setInterceptEnabled] = useState(false)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [settings, setSettingsState] = useState<Settings | null>(null)
   const [rules, setRules] = useState<RuleSpec[]>([])
 
   const reload = async () => {
-    const [ps, me, ie, ds, s, r] = await Promise.all([
+    const [ps, me, ds, s, r] = await Promise.all([
       proxyStatus(),
       tlsGetMitmEnabled(),
-      interceptGetEnabled(),
       dashboardStats(),
       settingsGet(),
       rulesList(),
     ])
     setProxy(ps)
     setMitmEnabled(me)
-    setInterceptEnabled(ie)
     setStats(ds)
     setSettingsState(s)
     setRules(r)
@@ -930,6 +950,13 @@ export function ProxyView() {
       unlisten?.()
     }
   }, [])
+
+  const updateSettings = (patch: Partial<Settings>) => {
+    setSettingsState((prev) => (prev ? ({ ...prev, ...patch } as Settings) : prev))
+    settingsSet(patch)
+      .then((s) => setSettingsState(s))
+      .catch(() => {})
+  }
 
   const bind = proxy?.bind || '127.0.0.1:8080'
   const [address, portStr] = bind.split(':')
@@ -1055,9 +1082,7 @@ export function ProxyView() {
               <Switch
                 checked={Boolean(settings?.systemProxyEnabled)}
                 onCheckedChange={(enabled) => {
-                  settingsSet({ systemProxyEnabled: enabled })
-                    .then((s) => setSettingsState(s))
-                    .catch(() => {})
+                  updateSettings({ systemProxyEnabled: enabled })
                 }}
               />
             </div>
@@ -1074,16 +1099,7 @@ export function ProxyView() {
               <Switch
                 checked={Boolean(settings?.showConnectTunnels)}
                 onCheckedChange={(enabled) => {
-                  settingsSet({ showConnectTunnels: enabled })
-                    .then((s) => {
-                      setSettingsState(s)
-                      window.dispatchEvent(
-                        new CustomEvent('skuntir:settings-updated', {
-                          detail: { showConnectTunnels: Boolean(s.showConnectTunnels) },
-                        })
-                      )
-                    })
-                    .catch(() => {})
+                  updateSettings({ showConnectTunnels: enabled })
                 }}
               />
             </div>
@@ -1129,9 +1145,7 @@ export function ProxyView() {
               <Switch
                 checked={Boolean(settings?.verifyCertificates)}
                 onCheckedChange={(enabled) => {
-                  settingsSet({ verifyCertificates: enabled })
-                    .then((s) => setSettingsState(s))
-                    .catch(() => {})
+                  updateSettings({ verifyCertificates: enabled })
                 }}
               />
             </div>
@@ -1205,9 +1219,7 @@ export function ProxyView() {
               <Switch
                 checked={interceptEnabled}
                 onCheckedChange={(enabled) => {
-                  interceptSetEnabled(enabled)
-                    .then((v) => setInterceptEnabled(v))
-                    .catch(() => {})
+                  onInterceptToggle(enabled)
                 }}
               />
             </div>
@@ -1609,7 +1621,7 @@ export function ScannerView() {
 
 export function IntruderView() {
   const [attackType, setAttackType] = useState('sniper')
-  const [templateRaw, setTemplateRaw] = useState(`POST /api/auth/login HTTP/1.1
+  const exampleTemplateRaw = `POST https://api.example.com/api/auth/login HTTP/1.1
 Host: api.example.com
 Content-Type: application/json
 Authorization: Bearer §token§
@@ -1617,16 +1629,21 @@ Authorization: Bearer §token§
 {
   "email": "§email§",
   "password": "§password§"
-}`)
-  const [payloadText, setPayloadText] = useState(`admin@example.com
+}`
+  const examplePayloadText = `admin@example.com
 user@example.com
 test@example.com
 admin
 root
-administrator`)
+administrator`
+  const [templateRaw, setTemplateRaw] = useState(exampleTemplateRaw)
+  const [payloadText, setPayloadText] = useState(examplePayloadText)
   const [attackId, setAttackId] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
+  const [results, setResults] = useState<IntruderResult[]>([])
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const visualClearAfterMsRef = useRef<number | null>(null)
 
   useEffect(() => {
     const next = localStorage.getItem('skuntir:intruderTemplateRaw')
@@ -1634,23 +1651,52 @@ administrator`)
       setTemplateRaw(next)
       localStorage.removeItem('skuntir:intruderTemplateRaw')
     }
+    settingsGet()
+      .then((s) => {
+        if (s.showExamples === false) {
+          setTemplateRaw((prev) => (prev === exampleTemplateRaw ? '' : prev))
+          setPayloadText((prev) => (prev === examplePayloadText ? '' : prev))
+        } else {
+          setTemplateRaw((prev) => (prev.trim() === '' ? exampleTemplateRaw : prev))
+          setPayloadText((prev) => (prev.trim() === '' ? examplePayloadText : prev))
+        }
+      })
+      .catch(() => {})
 
     let unlisten: (() => void) | null = null
+    const onVisualClear = (ev: Event) => {
+      const e = ev as CustomEvent
+      const ts = typeof e.detail?.tsMs === 'number' ? e.detail.tsMs : Date.now()
+      visualClearAfterMsRef.current = ts
+      setResults([])
+      setProgress(null)
+      setErrorMsg(null)
+    }
     onBackendEvent((ev) => {
       if (ev.type === 'IntruderStarted') {
         setAttackId(ev.payload.attack_id)
         setRunning(true)
         setProgress(null)
+        setResults([])
+        setErrorMsg(null)
       }
       if (ev.type === 'IntruderProgress') {
         setProgress({ done: ev.payload.done, total: ev.payload.total })
+      }
+      if (ev.type === 'IntruderResult') {
+        const r = ev.payload.result
+        const cutoff = visualClearAfterMsRef.current
+        if (cutoff && r.tsMs < cutoff) return
+        setResults((prev) => [r, ...prev].slice(0, 5000))
       }
       if (ev.type === 'IntruderCompleted') {
         setRunning(false)
       }
     }).then((u) => (unlisten = u))
+    window.addEventListener('skuntir:visual-clear', onVisualClear)
     return () => {
       unlisten?.()
+      window.removeEventListener('skuntir:visual-clear', onVisualClear)
     }
   }, [])
 
@@ -1680,17 +1726,25 @@ administrator`)
                     intruderStop().catch(() => {})
                     return
                   }
-                  const payloads = payloadText
-                    .split('\n')
-                    .map((l) => l.trim())
-                    .filter(Boolean)
-                  intruderStart({ attackType, templateRaw, payloads })
+                  setErrorMsg(null)
+                  setResults([])
+                  const blocks = payloadText
+                    .split(/\n\s*\n/g)
+                    .map((b) => b.split('\n').map((l) => l.trim()).filter(Boolean))
+                    .filter((b) => b.length > 0)
+                  const payloadSets = blocks.length > 0 ? blocks : []
+                  const payloads = payloadSets[0] ?? []
+                  intruderStart({ attackType, templateRaw, payloads, payloadSets })
                     .then((r) => {
                       setAttackId(r.attackId)
                       setRunning(true)
                       setProgress({ done: 0, total: r.payloadCount })
                     })
-                    .catch(() => {})
+                    .catch((e) => {
+                      setRunning(false)
+                      setProgress(null)
+                      setErrorMsg(String(e))
+                    })
                 }}
               >
                 {running ? (
@@ -1771,6 +1825,33 @@ administrator`)
               Clear
             </Button>
           </div>
+          {errorMsg && <div className="mt-3 text-xs text-destructive whitespace-pre-wrap break-words">{errorMsg}</div>}
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-muted-foreground">Results</span>
+              <span className="text-xs text-muted-foreground">{results.length}</span>
+            </div>
+            {results.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No results yet</div>
+            ) : (
+              <div className="space-y-1">
+                {results.slice().reverse().map((r, idx) => (
+                  <div
+                    key={`${r.id}-${r.tsMs}-${r.seq}-${idx}`}
+                    className={cn(
+                      'rounded-md border border-border px-2 py-1 text-xs font-mono flex items-center justify-between',
+                      r.error ? 'bg-destructive/10' : r.statusCode && r.statusCode >= 200 && r.statusCode < 400 ? 'bg-status-success/10' : 'bg-muted/30'
+                    )}
+                  >
+                    <span className="text-muted-foreground">#{r.seq + 1}</span>
+                    <span className="text-foreground">{r.statusCode ?? 'ERR'}</span>
+                    <span className="text-muted-foreground">{r.durationMs ?? '-'}ms</span>
+                    <span className="text-muted-foreground">{r.size ?? '-'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -1781,7 +1862,7 @@ export function RepeaterView() {
   const [response, setResponse] = useState<string | null>(null)
   const [result, setResult] = useState<RepeaterSendResult | null>(null)
   const [sending, setSending] = useState(false)
-  const [rawRequest, setRawRequest] = useState(`POST /api/users/1 HTTP/1.1
+  const exampleRawRequest = `POST https://api.example.com/api/users/1 HTTP/1.1
 Host: api.example.com
 Content-Type: application/json
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
@@ -1790,7 +1871,8 @@ Accept: application/json
 {
   "name": "Updated Name",
   "email": "updated@example.com"
-}`)
+}`
+  const [rawRequest, setRawRequest] = useState(exampleRawRequest)
 
   useEffect(() => {
     const next = localStorage.getItem('skuntir:repeaterRaw')
@@ -1800,6 +1882,15 @@ Accept: application/json
       setResponse(null)
       setResult(null)
     }
+    settingsGet()
+      .then((s) => {
+        if (s.showExamples === false) {
+          setRawRequest((prev) => (prev === exampleRawRequest ? '' : prev))
+        } else {
+          setRawRequest((prev) => (prev.trim() === '' ? exampleRawRequest : prev))
+        }
+      })
+      .catch(() => {})
   }, [])
 
   const handleSend = async () => {
@@ -1891,22 +1982,20 @@ Accept: application/json
   )
 }
 
-export function InterceptView() {
-  const [isIntercepting, setIsIntercepting] = useState(false)
+export function InterceptView({
+  interceptEnabled,
+  onInterceptToggle,
+}: {
+  interceptEnabled: boolean
+  onInterceptToggle: (enabled: boolean) => void
+}) {
   const [active, setActive] = useState<{ interceptionId: string; raw: string } | null>(null)
   const [editedRaw, setEditedRaw] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let unlisten: (() => void) | null = null
-    let cancelled = false
-
     const init = async () => {
-      try {
-        const enabled = await interceptGetEnabled()
-        if (!cancelled) setIsIntercepting(enabled)
-      } catch {}
-
       unlisten = await onBackendEvent((ev: BackendEvent) => {
         if (ev.type !== 'InterceptPaused') return
         setActive({ interceptionId: ev.payload.interception_id, raw: ev.payload.raw })
@@ -1914,10 +2003,9 @@ export function InterceptView() {
       })
     }
 
-    init()
+    init().catch(() => {})
 
     return () => {
-      cancelled = true
       if (unlisten) unlisten()
     }
   }, [])
@@ -1927,19 +2015,14 @@ export function InterceptView() {
       <div className="p-4 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button 
-            variant={isIntercepting ? 'default' : 'outline'}
+            variant={interceptEnabled ? 'default' : 'outline'}
             size="sm"
             onClick={async () => {
-              const next = !isIntercepting
-              setIsIntercepting(next)
-              try {
-                const actual = await interceptSetEnabled(next)
-                setIsIntercepting(actual)
-              } catch {}
+              onInterceptToggle(!interceptEnabled)
             }}
-            className={isIntercepting ? 'bg-destructive hover:bg-destructive/90' : ''}
+            className={interceptEnabled ? 'bg-destructive hover:bg-destructive/90' : ''}
           >
-            {isIntercepting ? (
+            {interceptEnabled ? (
               <>
                 <Pause className="w-4 h-4 mr-2" />
                 Intercept is ON
@@ -2011,9 +2094,9 @@ export function InterceptView() {
         <Badge variant="outline" className="gap-1.5">
           <span className={cn(
             'w-1.5 h-1.5 rounded-full',
-            isIntercepting ? 'bg-destructive animate-pulse' : 'bg-muted-foreground'
+            interceptEnabled ? 'bg-destructive animate-pulse' : 'bg-muted-foreground'
           )} />
-          {isIntercepting ? (active ? 'Paused' : 'Waiting for request...') : 'Passthrough mode'}
+          {interceptEnabled ? (active ? 'Paused' : 'Waiting for request...') : 'Passthrough mode'}
         </Badge>
       </div>
 
@@ -2030,7 +2113,7 @@ export function InterceptView() {
               <ShieldAlert className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p className="text-sm font-medium">No request intercepted</p>
               <p className="text-xs text-muted-foreground mt-1">
-                {isIntercepting ? 'Waiting for incoming requests...' : 'Turn on intercept to capture requests'}
+                {interceptEnabled ? 'Waiting for incoming requests...' : 'Turn on intercept to capture requests'}
               </p>
             </div>
           </div>
@@ -2209,7 +2292,7 @@ export function DecoderView() {
 export function ComparerView() {
   const [mode, setMode] = useState<'words' | 'lines' | 'bytes'>('words')
   const [syncScroll, setSyncScroll] = useState(false)
-  const [item1, setItem1] = useState(`HTTP/1.1 200 OK
+  const exampleItem1 = `HTTP/1.1 200 OK
 Content-Type: application/json
 
 {
@@ -2219,8 +2302,8 @@ Content-Type: application/json
     "email": "john@example.com",
     "role": "user"
   }
-}`)
-  const [item2, setItem2] = useState(`HTTP/1.1 200 OK
+}`
+  const exampleItem2 = `HTTP/1.1 200 OK
 Content-Type: application/json
 
 {
@@ -2230,11 +2313,31 @@ Content-Type: application/json
     "email": "john@example.com",
     "role": "admin"
   }
-}`)
+}`
+  const [item1, setItem1] = useState(exampleItem1)
+  const [item2, setItem2] = useState(exampleItem2)
 
   const [stats, setStats] = useState({ differences: 0, added: 0, removed: 0, changed: 0 })
   const ref1 = useRef<HTMLTextAreaElement | null>(null)
   const ref2 = useRef<HTMLTextAreaElement | null>(null)
+  const diffRef1 = useRef<HTMLDivElement | null>(null)
+  const diffRef2 = useRef<HTMLDivElement | null>(null)
+  const [diffRows, setDiffRows] = useState<DiffRow[] | null>(null)
+  const [view, setView] = useState<'edit' | 'diff'>('edit')
+
+  useEffect(() => {
+    settingsGet()
+      .then((s) => {
+        if (s.showExamples === false) {
+          setItem1((prev) => (prev === exampleItem1 ? '' : prev))
+          setItem2((prev) => (prev === exampleItem2 ? '' : prev))
+        } else {
+          setItem1((prev) => (prev.trim() === '' ? exampleItem1 : prev))
+          setItem2((prev) => (prev.trim() === '' ? exampleItem2 : prev))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const compute = () => {
     if (mode === 'bytes') {
@@ -2243,21 +2346,27 @@ Content-Type: application/json
       const added = Math.max(0, b - a)
       const removed = Math.max(0, a - b)
       setStats({ differences: added + removed, added, removed, changed: 0 })
+      setDiffRows(null)
+      setView('edit')
       return
     }
 
-    const split = (s: string) => (mode === 'lines' ? s.split(/\r?\n/) : s.split(/\s+/)).filter(Boolean)
-    const a = split(item1)
-    const b = split(item2)
-    const sa = new Set(a)
-    const sb = new Set(b)
-    const removed = a.filter((x) => !sb.has(x)).length
-    const added = b.filter((x) => !sa.has(x)).length
-    const changed = Math.min(added, removed)
-    setStats({ differences: added + removed, added, removed, changed })
+    const rows = buildLineDiff(item1, item2)
+    setDiffRows(rows)
+    const added = rows.filter((r) => r.kind === 'add').length
+    const removed = rows.filter((r) => r.kind === 'remove').length
+    const changed = rows.filter((r) => r.kind === 'change').length
+    setStats({ differences: added + removed + changed, added, removed, changed })
+    setView('diff')
   }
 
   const sync = (from: HTMLTextAreaElement, to: HTMLTextAreaElement) => {
+    const denom = Math.max(1, from.scrollHeight - from.clientHeight)
+    const ratio = from.scrollTop / denom
+    to.scrollTop = ratio * Math.max(0, to.scrollHeight - to.clientHeight)
+  }
+
+  const syncDiv = (from: HTMLDivElement, to: HTMLDivElement) => {
     const denom = Math.max(1, from.scrollHeight - from.clientHeight)
     const ratio = from.scrollTop / denom
     to.scrollTop = ratio * Math.max(0, to.scrollHeight - to.clientHeight)
@@ -2281,6 +2390,10 @@ Content-Type: application/json
               <SelectItem value="bytes">By Bytes</SelectItem>
             </SelectContent>
           </Select>
+          <Button variant={view === 'diff' ? 'default' : 'outline'} size="sm" onClick={() => setView((v) => (v === 'diff' ? 'edit' : 'diff'))}>
+            <ArrowRightLeft className="w-4 h-4 mr-2" />
+            {view === 'diff' ? 'Edit' : 'Diff'}
+          </Button>
           <Button
             variant={syncScroll ? 'default' : 'outline'}
             size="sm"
@@ -2305,19 +2418,53 @@ Content-Type: application/json
               Paste
             </Button>
           </div>
-          <Textarea 
-            className="flex-1 font-mono text-xs resize-none m-2 rounded-md"
-            placeholder="Paste first item here..."
-            ref={ref1 as any}
-            value={item1}
-            onChange={(e) => setItem1(e.target.value)}
-            onScroll={(e) => {
-              if (!syncScroll) return
-              const other = ref2.current
-              if (!other) return
-              sync(e.currentTarget, other)
-            }}
-          />
+          {view === 'diff' && diffRows ? (
+            <div
+              ref={diffRef1}
+              className="flex-1 overflow-auto m-2 rounded-md border border-border bg-card"
+              onScroll={(e) => {
+                if (!syncScroll) return
+                const other = diffRef2.current
+                if (!other) return
+                syncDiv(e.currentTarget, other)
+              }}
+            >
+              <pre className="proxer-editor p-2">
+                {diffRows.map((r, idx) => (
+                  <div
+                    key={idx}
+                    className={cn(
+                      'grid grid-cols-[52px_1fr] gap-2 px-2 py-0.5 rounded-sm',
+                      r.kind === 'add'
+                        ? 'bg-status-success/10'
+                        : r.kind === 'remove'
+                          ? 'bg-destructive/10'
+                          : r.kind === 'change'
+                            ? 'bg-yellow-500/10'
+                            : ''
+                    )}
+                  >
+                    <span className="text-muted-foreground select-none text-right">{r.left ? idx + 1 : ''}</span>
+                    <span className="whitespace-pre-wrap break-all">{r.left}</span>
+                  </div>
+                ))}
+              </pre>
+            </div>
+          ) : (
+            <Textarea
+              className="flex-1 font-mono text-xs resize-none m-2 rounded-md"
+              placeholder="Paste first item here..."
+              ref={ref1 as any}
+              value={item1}
+              onChange={(e) => setItem1(e.target.value)}
+              onScroll={(e) => {
+                if (!syncScroll) return
+                const other = ref2.current
+                if (!other) return
+                sync(e.currentTarget, other)
+              }}
+            />
+          )}
         </div>
 
         <div className="flex-1 flex flex-col">
@@ -2332,19 +2479,53 @@ Content-Type: application/json
               Paste
             </Button>
           </div>
-          <Textarea 
-            className="flex-1 font-mono text-xs resize-none m-2 rounded-md"
-            placeholder="Paste second item here..."
-            ref={ref2 as any}
-            value={item2}
-            onChange={(e) => setItem2(e.target.value)}
-            onScroll={(e) => {
-              if (!syncScroll) return
-              const other = ref1.current
-              if (!other) return
-              sync(e.currentTarget, other)
-            }}
-          />
+          {view === 'diff' && diffRows ? (
+            <div
+              ref={diffRef2}
+              className="flex-1 overflow-auto m-2 rounded-md border border-border bg-card"
+              onScroll={(e) => {
+                if (!syncScroll) return
+                const other = diffRef1.current
+                if (!other) return
+                syncDiv(e.currentTarget, other)
+              }}
+            >
+              <pre className="proxer-editor p-2">
+                {diffRows.map((r, idx) => (
+                  <div
+                    key={idx}
+                    className={cn(
+                      'grid grid-cols-[52px_1fr] gap-2 px-2 py-0.5 rounded-sm',
+                      r.kind === 'add'
+                        ? 'bg-status-success/10'
+                        : r.kind === 'remove'
+                          ? 'bg-destructive/10'
+                          : r.kind === 'change'
+                            ? 'bg-yellow-500/10'
+                            : ''
+                    )}
+                  >
+                    <span className="text-muted-foreground select-none text-right">{r.right ? idx + 1 : ''}</span>
+                    <span className="whitespace-pre-wrap break-all">{r.right}</span>
+                  </div>
+                ))}
+              </pre>
+            </div>
+          ) : (
+            <Textarea
+              className="flex-1 font-mono text-xs resize-none m-2 rounded-md"
+              placeholder="Paste second item here..."
+              ref={ref2 as any}
+              value={item2}
+              onChange={(e) => setItem2(e.target.value)}
+              onScroll={(e) => {
+                if (!syncScroll) return
+                const other = ref1.current
+                if (!other) return
+                sync(e.currentTarget, other)
+              }}
+            />
+          )}
         </div>
       </div>
 
@@ -2462,8 +2643,11 @@ export function LoggerView() {
 
       <ScrollArea className="flex-1">
         <div className="p-2">
-          {filteredLogs.map((log) => (
-            <div key={log.id} className="flex items-start gap-3 py-1.5 px-2 hover:bg-muted/50 rounded text-sm font-mono">
+          {filteredLogs.map((log, idx) => (
+            <div
+              key={`${log.id}-${log.timestamp}-${idx}`}
+              className="flex items-start gap-3 py-1.5 px-2 hover:bg-muted/50 rounded text-sm font-mono"
+            >
               <span className="text-muted-foreground w-16 shrink-0">{log.timestamp}</span>
               <Badge
                 variant="outline"
@@ -2649,6 +2833,7 @@ export function SettingsView() {
       .then((s) => {
         setSettingsState(s)
         applyTheme(s.theme ?? 'system')
+        applyTypography(s)
         window.dispatchEvent(new CustomEvent('proxer:theme', { detail: { theme: s.theme ?? 'system' } }))
       })
       .catch(() => {})
@@ -2661,13 +2846,63 @@ export function SettingsView() {
   }, [])
 
   const update = (patch: Partial<Settings>) => {
+    setSettingsState((prev) => (prev ? ({ ...prev, ...patch } as Settings) : prev))
+    if (typeof patch.theme === 'string') {
+      applyTheme(patch.theme)
+      window.dispatchEvent(new CustomEvent('proxer:theme', { detail: { theme: patch.theme } }))
+    }
+    if (typeof patch.fontSize === 'number' || typeof patch.fontFamily === 'string') {
+      applyTypography({ fontSize: patch.fontSize, fontFamily: patch.fontFamily })
+      window.dispatchEvent(
+        new CustomEvent('skuntir:settings-updated', {
+          detail: {
+            fontSize: patch.fontSize,
+            fontFamily: patch.fontFamily,
+          },
+        })
+      )
+    }
+
     settingsSet(patch)
       .then((s) => {
         setSettingsState(s)
         applyTheme(s.theme ?? 'system')
+        applyTypography(s)
         window.dispatchEvent(new CustomEvent('proxer:theme', { detail: { theme: s.theme ?? 'system' } }))
+        window.dispatchEvent(
+          new CustomEvent('skuntir:settings-updated', {
+            detail: {
+              fontSize: s.fontSize,
+              fontFamily: s.fontFamily,
+              showConnectTunnels: Boolean(s.showConnectTunnels),
+              showExamples: s.showExamples !== false,
+            },
+          })
+        )
       })
       .catch(() => {})
+  }
+
+  const parseTheme = (v: string | null | undefined) => {
+    const raw = (v || 'system').toString()
+    const lower = raw.toLowerCase()
+    const mode =
+      lower === 'dark' || lower.startsWith('dark-')
+        ? 'dark'
+        : lower === 'light' || lower.startsWith('light-')
+          ? 'light'
+          : 'system'
+    const tone = lower.includes('gray') || lower.includes('grey') || lower.includes('grayscale') ? 'gray' : 'color'
+    const parts = lower.split('-')
+    const palette = parts.length >= 3 ? parts.slice(2).join('-') : 'default'
+    return { mode, tone, palette }
+  }
+
+  const buildTheme = (mode: string, tone: string, palette: string) => {
+    const m = mode === 'dark' ? 'dark' : mode === 'light' ? 'light' : 'system'
+    const t = tone === 'gray' ? 'gray' : 'color'
+    const p = palette && palette !== 'default' ? palette : 'default'
+    return `${m}-${t}${p === 'default' ? '' : `-${p}`}`
   }
 
   return (
@@ -2695,30 +2930,72 @@ export function SettingsView() {
                     <p className="text-sm font-medium">Theme</p>
                     <p className="text-xs text-muted-foreground">Choose color scheme</p>
                   </div>
-                  <Select
-                    value={
-                      settings?.theme === 'system'
-                        ? 'system-color'
-                        : settings?.theme === 'dark'
-                          ? 'dark-color'
-                          : settings?.theme === 'light'
-                            ? 'light-color'
-                            : settings?.theme ?? 'system-color'
-                    }
-                    onValueChange={(v) => update({ theme: v })}
-                  >
-                    <SelectTrigger className="w-44 h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="system-color">System (Color)</SelectItem>
-                      <SelectItem value="system-gray">System (Grayscale)</SelectItem>
-                      <SelectItem value="light-color">Light (Color)</SelectItem>
-                      <SelectItem value="light-gray">Light (Grayscale)</SelectItem>
-                      <SelectItem value="dark-color">Dark (Color)</SelectItem>
-                      <SelectItem value="dark-gray">Dark (Grayscale)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2">
+                    <Select
+                      value={parseTheme(settings?.theme).mode}
+                      onValueChange={(mode) => {
+                        const t = parseTheme(settings?.theme)
+                        update({ theme: buildTheme(mode, t.tone, t.palette) })
+                      }}
+                    >
+                      <SelectTrigger className="w-28 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="system">System</SelectItem>
+                        <SelectItem value="light">Light</SelectItem>
+                        <SelectItem value="dark">Dark</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Select
+                      value={parseTheme(settings?.theme).palette}
+                      onValueChange={(palette) => {
+                        const t = parseTheme(settings?.theme)
+                        update({ theme: buildTheme(t.mode, t.tone, palette) })
+                      }}
+                    >
+                      <SelectTrigger className="w-36 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">Default</SelectItem>
+                        <SelectItem value="catppuccin">Catppuccin</SelectItem>
+                        <SelectItem value="gruvbox">Gruvbox</SelectItem>
+                        <SelectItem value="nord">Nord</SelectItem>
+                        <SelectItem value="dracula">Dracula</SelectItem>
+                        <SelectItem value="tokyo-night">Tokyo Night</SelectItem>
+                        <SelectItem value="one-dark">One Dark</SelectItem>
+                        <SelectItem value="solarized">Solarized</SelectItem>
+                        <SelectItem value="monokai">Monokai</SelectItem>
+                        <SelectItem value="github">GitHub</SelectItem>
+                        <SelectItem value="ayu">Ayu</SelectItem>
+                        <SelectItem value="material">Material</SelectItem>
+                        <SelectItem value="rose-pine">Rosé Pine</SelectItem>
+                        <SelectItem value="everforest">Everforest</SelectItem>
+                        <SelectItem value="kanagawa">Kanagawa</SelectItem>
+                        <SelectItem value="night-owl">Night Owl</SelectItem>
+                        <SelectItem value="papercolor">PaperColor</SelectItem>
+                        <SelectItem value="vesper">Vesper</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Select
+                      value={parseTheme(settings?.theme).tone}
+                      onValueChange={(tone) => {
+                        const t = parseTheme(settings?.theme)
+                        update({ theme: buildTheme(t.mode, tone, t.palette) })
+                      }}
+                    >
+                      <SelectTrigger className="w-24 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="color">Color</SelectItem>
+                        <SelectItem value="gray">Gray</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <div>
@@ -2762,6 +3039,13 @@ export function SettingsView() {
                     <p className="text-xs text-muted-foreground">Reduce UI spacing</p>
                   </div>
                   <Switch checked={Boolean(settings?.compactMode)} onCheckedChange={(v) => update({ compactMode: v })} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Show Examples</p>
+                    <p className="text-xs text-muted-foreground">Show example templates in tools</p>
+                  </div>
+                  <Switch checked={settings?.showExamples !== false} onCheckedChange={(v) => update({ showExamples: v })} />
                 </div>
               </div>
             </Card>

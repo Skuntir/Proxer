@@ -7,7 +7,7 @@ use crate::{
     error::Result,
     events::{now_ms, BackendEvent, EventBus},
     http_types::HeaderPair,
-    storage::SqliteStore,
+    storage::StoreHandle,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,13 +43,13 @@ struct RunningScan {
 }
 
 pub struct ScannerManager {
-    store: Arc<SqliteStore>,
+    store: StoreHandle,
     events: EventBus,
     running: Arc<Mutex<Option<RunningScan>>>,
 }
 
 impl ScannerManager {
-    pub fn new(store: Arc<SqliteStore>, events: EventBus) -> Self {
+    pub fn new(store: StoreHandle, events: EventBus) -> Self {
         Self {
             store,
             events,
@@ -65,7 +65,7 @@ impl ScannerManager {
 
         let scan_id = format!("scan-{}", uuid::Uuid::new_v4());
         let (stop_tx, mut stop_rx) = oneshot::channel();
-        let store = self.store.clone();
+        let store = self.store.get();
         let events = self.events.clone();
         let progress_done = Arc::new(Mutex::new(0));
         let progress_total = Arc::new(Mutex::new(0));
@@ -209,10 +209,8 @@ impl ScannerManager {
 
     pub async fn findings_list(&self, severity: Option<String>, limit: u32, offset: u32) -> Result<Vec<UiVulnerability>> {
         let sev = severity.map(|s| normalize_severity(&s));
-        let rows = self
-            .store
-            .vulnerabilities_list(sev.as_deref(), limit, offset)
-            .await?;
+        let store = self.store.get();
+        let rows = store.vulnerabilities_list(sev.as_deref(), limit, offset).await?;
         let mut out = Vec::with_capacity(rows.len());
         for (id, _ts_ms, severity, title, host, path, description, remediation, confidence, cvss, cwe, requests) in rows {
             out.push(UiVulnerability {

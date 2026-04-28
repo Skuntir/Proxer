@@ -84,17 +84,7 @@ impl InterceptManager {
 
 pub fn render_raw_request(req: &ProxyRequest) -> String {
     let url = url::Url::parse(&req.url).ok();
-    let target = url
-        .as_ref()
-        .map(|u| {
-            let mut p = u.path().to_string();
-            if let Some(q) = u.query() {
-                p.push('?');
-                p.push_str(q);
-            }
-            p
-        })
-        .unwrap_or_else(|| "/".to_string());
+    let target = url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "/".to_string());
 
     let mut out = String::new();
     out.push_str(&format!("{} {} HTTP/1.1\r\n", req.method, target));

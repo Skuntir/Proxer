@@ -49,17 +49,6 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Build frontend (static export)
-        run: npm run build
-        working-directory: frontend
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
-
-      - name: Verify exported assets exist
-        run: node -e "require('fs').accessSync('frontend/out/index.html')"
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
-
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}

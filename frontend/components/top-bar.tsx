@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Search, Circle, HelpCircle, Trash2 } from 'lucide-react'
+import { Search, Circle, HelpCircle, Trash2, EyeOff } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
@@ -16,6 +16,7 @@ interface TopBarProps {
   onSearchChange: (query: string) => void
   canClearTraffic: boolean
   onClearTraffic: () => void
+  onVisualClear: () => void
 }
 
 export function TopBar({
@@ -25,6 +26,7 @@ export function TopBar({
   onSearchChange,
   canClearTraffic,
   onClearTraffic,
+  onVisualClear,
 }: TopBarProps) {
   const [bind, setBind] = useState<string | null>(null)
   const [connected, setConnected] = useState<boolean>(true)
@@ -114,6 +116,15 @@ export function TopBar({
             onClick={() => onClearTraffic()}
           >
             <Trash2 className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 p-0"
+            title="Clear data (visual only)"
+            onClick={() => onVisualClear()}
+          >
+            <EyeOff className="w-4 h-4" />
           </Button>
           <Button
             variant="ghost"

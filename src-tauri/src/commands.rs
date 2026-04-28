@@ -16,6 +16,7 @@ use crate::{
     http_types::{HistoryEntry, HistoryEntrySummary},
     intruder::{IntruderStartRequest, IntruderStartResponse, UiIntruderResult},
     logs::UiLogEntry,
+    project::load_session_config,
     proxy::ProxyStatus,
     rules::RuleSpec,
     scanner::{ScanStatus, UiVulnerability},
@@ -25,6 +26,41 @@ use crate::{
     ui::{format_bytes, format_duration_ms, header_map, ms_to_iso, parse_cookies_from_headers, UiHttpRequest},
     system_proxy,
 };
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStatus {
+    pub mode: String,
+    pub path: Option<String>,
+    pub recent_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn project_status(state: State<'_, AppState>) -> Result<ProjectStatus, String> {
+    let st = state.project_state();
+    let cfg = load_session_config(&state.app).await;
+    Ok(ProjectStatus {
+        mode: match st.mode {
+            crate::app_state::ProjectMode::Temporary => "temporary".into(),
+            crate::app_state::ProjectMode::Project => "project".into(),
+        },
+        path: st.path.map(|p| p.to_string_lossy().to_string()),
+        recent_path: cfg.last_project_path,
+    })
+}
+
+#[tauri::command]
+pub async fn project_use_temporary(state: State<'_, AppState>) -> Result<ProjectStatus, String> {
+    state.set_temporary().await.map_err(String::from)?;
+    project_status(state).await
+}
+
+#[tauri::command]
+pub async fn project_open(state: State<'_, AppState>, path: String) -> Result<ProjectStatus, String> {
+    let p = PathBuf::from(path);
+    state.open_project(p).await.map_err(String::from)?;
+    project_status(state).await
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,21 +175,21 @@ pub async fn logs_clear(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStats, String> {
-    compute_dashboard_stats(state.store.clone())
+    compute_dashboard_stats(state.store.get())
         .await
         .map_err(String::from)
 }
 
 #[tauri::command]
 pub async fn dashboard_details(state: State<'_, AppState>) -> Result<DashboardDetails, String> {
-    compute_dashboard_details(state.store.clone())
+    compute_dashboard_details(state.store.get())
         .await
         .map_err(String::from)
 }
 
 #[tauri::command]
 pub async fn sitemap_get(state: State<'_, AppState>, limit: Option<u32>) -> Result<Vec<UiSitemapNode>, String> {
-    build_sitemap(state.store.clone(), limit.unwrap_or(2000))
+    build_sitemap(state.store.get(), limit.unwrap_or(2000))
         .await
         .map_err(String::from)
 }
@@ -268,7 +304,8 @@ pub async fn intruder_results_list(
 
 #[tauri::command]
 pub async fn traffic_clear(state: State<'_, AppState>) -> Result<(), String> {
-    state.store.traffic_clear().await.map_err(String::from)?;
+    let store = state.store.get();
+    store.traffic_clear().await.map_err(String::from)?;
     let _ = state.logs.emit("INFO", "traffic", "cleared traffic").await;
     Ok(())
 }
@@ -462,8 +499,8 @@ pub async fn history_list(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<HistoryEntrySummary>, String> {
-    state
-        .store
+    let store = state.store.get();
+    store
         .list(limit.unwrap_or(200), offset.unwrap_or(0))
         .await
         .map_err(String::from)
@@ -471,7 +508,8 @@ pub async fn history_list(
 
 #[tauri::command]
 pub async fn history_get(state: State<'_, AppState>, id: String) -> Result<HistoryEntry, String> {
-    state.store.get(&id).await.map_err(String::from)
+    let store = state.store.get();
+    store.get(&id).await.map_err(String::from)
 }
 
 #[tauri::command]
@@ -480,8 +518,8 @@ pub async fn ui_history_list(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<UiHttpRequest>, String> {
-    let rows = state
-        .store
+    let store = state.store.get();
+    let rows = store
         .list(limit.unwrap_or(200), offset.unwrap_or(0))
         .await
         .map_err(String::from)?;
@@ -495,7 +533,8 @@ pub async fn ui_history_list(
 
 #[tauri::command]
 pub async fn ui_history_get(state: State<'_, AppState>, id: String) -> Result<UiHttpRequest, String> {
-    let entry = state.store.get(&id).await.map_err(String::from)?;
+    let store = state.store.get();
+    let entry = store.get(&id).await.map_err(String::from)?;
 
     let url = url::Url::parse(&entry.summary.url).ok();
     let host = url
@@ -598,7 +637,8 @@ pub async fn ui_history_get(state: State<'_, AppState>, id: String) -> Result<Ui
 
 #[tauri::command]
 pub async fn history_replay(state: State<'_, AppState>, id: String) -> Result<String, String> {
-    let req = state.store.get_for_replay(&id).await.map_err(String::from)?;
+    let store = state.store.get();
+    let req = store.get_for_replay(&id).await.map_err(String::from)?;
     let new_id = state
         .proxy
         .engine()
@@ -628,8 +668,11 @@ pub async fn rules_remove(state: State<'_, AppState>, id: String) -> Result<bool
 }
 
 #[tauri::command]
-pub async fn repeater_send_raw(raw_request: String) -> Result<RepeaterSendResult, String> {
-    let parsed = parse_raw_http_request(&raw_request).map_err(String::from)?;
+pub async fn repeater_send_raw(raw_request: Option<String>, rawRequest: Option<String>) -> Result<RepeaterSendResult, String> {
+    let raw = raw_request
+        .or(rawRequest)
+        .ok_or_else(|| String::from(AppError::InvalidInput("missing rawRequest".into())))?;
+    let parsed = parse_raw_http_request(&raw).map_err(String::from)?;
 
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -792,7 +835,47 @@ fn parse_raw_http_request(raw: &str) -> crate::error::Result<ParsedRawRequest> {
             .map_err(|_| crate::error::AppError::InvalidInput("invalid URL".into()))?
     } else {
         let host = host_hdr.ok_or_else(|| crate::error::AppError::InvalidInput("missing Host header".into()))?;
-        let base = format!("http://{host}");
+        let infer_scheme = || -> &'static str {
+            if host.contains(":443") {
+                return "https";
+            }
+            if host.contains(":80") {
+                return "http";
+            }
+            for (k, v) in &headers {
+                let key = k.as_str().to_ascii_lowercase();
+                let val = v.trim();
+                if key == "x-forwarded-proto" {
+                    if val.eq_ignore_ascii_case("https") {
+                        return "https";
+                    }
+                    if val.eq_ignore_ascii_case("http") {
+                        return "http";
+                    }
+                }
+                if key == "forwarded" {
+                    let lower = val.to_ascii_lowercase();
+                    if lower.contains("proto=https") {
+                        return "https";
+                    }
+                    if lower.contains("proto=http") {
+                        return "http";
+                    }
+                }
+                if key == "origin" || key == "referer" {
+                    if let Ok(u) = url::Url::parse(val) {
+                        if u.scheme() == "https" {
+                            return "https";
+                        }
+                        if u.scheme() == "http" {
+                            return "http";
+                        }
+                    }
+                }
+            }
+            "https"
+        };
+        let base = format!("{}://{host}", infer_scheme());
         let base = url::Url::parse(&base)
             .map_err(|_| crate::error::AppError::InvalidInput("invalid Host header".into()))?;
         base.join(target)

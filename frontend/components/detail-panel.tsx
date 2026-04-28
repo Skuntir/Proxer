@@ -2,7 +2,6 @@
 
 import { HttpRequest } from '@/lib/proxer'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Copy, Check, X, ChevronDown } from 'lucide-react'
@@ -45,16 +44,16 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-function CodeBlock({ content, title }: { content: string; title?: string }) {
+function CodeBlock({ content, title, className }: { content: string; title?: string; className?: string }) {
   return (
-    <div className="rounded-md border border-border overflow-hidden">
+    <div className={cn("rounded-md border border-border overflow-hidden flex flex-col min-h-0", className)}>
       {title && (
         <div className="flex items-center justify-between px-3 py-2 bg-muted/50 border-b border-border">
           <span className="text-xs font-medium text-muted-foreground">{title}</span>
           <CopyButton text={content} />
         </div>
       )}
-      <pre className="font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all p-3 bg-card overflow-x-auto max-h-64">
+      <pre className="proxer-editor whitespace-pre-wrap break-all p-3 bg-card overflow-auto flex-1 min-h-0 text-foreground">
         {content || <span className="text-muted-foreground italic">No content</span>}
       </pre>
     </div>
@@ -221,8 +220,8 @@ ${request.responseBody ? `\n${request.responseBody}` : ''}`
       </div>
 
       {/* Tabs content */}
-      <Tabs defaultValue="headers" className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-4 pt-2 border-b border-border bg-card">
+      <Tabs defaultValue="headers" className="flex-1 flex flex-col overflow-hidden min-h-0">
+        <div className="px-4 pt-2 pb-2 border-b border-border bg-card">
           <TabsList className="h-9 bg-muted/50 p-1">
             <TabsTrigger value="headers" className="text-xs px-3 data-[state=active]:bg-card data-[state=active]:shadow-sm">Headers</TabsTrigger>
             <TabsTrigger value="body" className="text-xs px-3 data-[state=active]:bg-card data-[state=active]:shadow-sm">Body</TabsTrigger>
@@ -236,32 +235,30 @@ ${request.responseBody ? `\n${request.responseBody}` : ''}`
           </TabsList>
         </div>
 
-        <ScrollArea className="flex-1">
-          <TabsContent value="headers" className="m-0 p-4">
+          <TabsContent value="headers" className="m-0 p-4 flex-1 min-h-0 overflow-auto">
             <div className="grid grid-cols-2 gap-4">
               <HeadersTable headers={request.requestHeaders} title="Request Headers" />
               <HeadersTable headers={request.headers} title="Response Headers" />
             </div>
           </TabsContent>
 
-          <TabsContent value="body" className="m-0 p-4">
-            <div className="grid grid-cols-2 gap-4">
+          <TabsContent value="body" className="m-0 p-4 flex-1 min-h-0 overflow-hidden">
+            <div className="grid grid-cols-2 gap-4 h-full min-h-0">
               <CodeBlock content={request.body} title="Request Body" />
               <CodeBlock content={request.responseBody} title="Response Body" />
             </div>
           </TabsContent>
 
-          <TabsContent value="raw" className="m-0 p-4">
-            <div className="grid grid-cols-2 gap-4">
+          <TabsContent value="raw" className="m-0 p-4 flex-1 min-h-0 overflow-hidden">
+            <div className="grid grid-cols-2 gap-4 h-full min-h-0">
               <CodeBlock content={rawRequest} title="Raw Request" />
               <CodeBlock content={rawResponse} title="Raw Response" />
             </div>
           </TabsContent>
 
-          <TabsContent value="cookies" className="m-0 p-4">
+          <TabsContent value="cookies" className="m-0 p-4 flex-1 min-h-0 overflow-auto">
             <CookiesTable cookies={request.cookies} />
           </TabsContent>
-        </ScrollArea>
       </Tabs>
     </div>
   )

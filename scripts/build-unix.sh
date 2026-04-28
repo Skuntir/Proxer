@@ -14,7 +14,5 @@ else
   fi
 fi
 
-npm run build
-
 cd "$repo_root/src-tauri"
 cargo tauri build

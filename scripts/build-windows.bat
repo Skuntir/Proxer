@@ -26,9 +26,6 @@ if exist "package-lock.json" (
   )
 )
 
-call npm run build
-if errorlevel 1 exit /b 1
-
 cd /d "..\src-tauri"
 call cargo tauri build
 if errorlevel 1 exit /b 1

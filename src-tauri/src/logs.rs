@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     error::Result,
     events::{now_ms, BackendEvent, EventBus},
-    storage::SqliteStore,
+    storage::StoreHandle,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,19 +18,20 @@ pub struct UiLogEntry {
 }
 
 pub struct LogManager {
-    store: Arc<SqliteStore>,
+    store: StoreHandle,
     events: EventBus,
 }
 
 impl LogManager {
-    pub fn new(store: Arc<SqliteStore>, events: EventBus) -> Self {
+    pub fn new(store: StoreHandle, events: EventBus) -> Self {
         Self { store, events }
     }
 
     pub async fn emit(&self, level: &str, source: &str, message: &str) -> Result<UiLogEntry> {
         let id = Uuid::new_v4().to_string();
         let ts_ms = now_ms();
-        self.store
+        let store = self.store.get();
+        store
             .logs_insert(&id, ts_ms, level, source, message)
             .await?;
 
@@ -52,8 +51,8 @@ impl LogManager {
 
     pub async fn list(&self, level: Option<String>, limit: u32, offset: u32) -> Result<Vec<UiLogEntry>> {
         let level_filter = level.as_deref().map(|s| s.to_uppercase());
-        let rows = self
-            .store
+        let store = self.store.get();
+        let rows = store
             .logs_list(level_filter.as_deref(), limit, offset)
             .await?;
 
@@ -71,7 +70,8 @@ impl LogManager {
     }
 
     pub async fn clear(&self) -> Result<()> {
-        self.store.logs_clear().await?;
+        let store = self.store.get();
+        store.logs_clear().await?;
         Ok(())
     }
 }

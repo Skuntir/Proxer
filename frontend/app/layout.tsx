@@ -1,11 +1,14 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Geist, Geist_Mono, JetBrains_Mono, Fira_Code, Source_Code_Pro } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/sonner'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const geist = Geist({ subsets: ['latin'], variable: '--font-geist' })
+const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono' })
+const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrains-mono' })
+const firaCode = Fira_Code({ subsets: ['latin'], variable: '--font-fira-code' })
+const sourceCodePro = Source_Code_Pro({ subsets: ['latin'], variable: '--font-source-code-pro' })
 
 export const metadata: Metadata = {
   title: 'Skuntir - Web Security Proxy',
@@ -27,7 +30,10 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className="bg-background">
+    <html
+      lang="en"
+      className={`${geist.variable} ${geistMono.variable} ${jetbrainsMono.variable} ${firaCode.variable} ${sourceCodePro.variable} bg-background`}
+    >
       <body className="font-sans antialiased overflow-hidden">
         {children}
         <Toaster />

@@ -29,6 +29,39 @@ export function applyTheme(setting: ThemeSetting) {
   const tone = toTone(s)
   const mode = toMode(s)
 
+  const toPalette = (v: string) => {
+    const lower = v.toLowerCase()
+    const parts = lower.split('-')
+    if (parts.length >= 3) {
+      const p = parts.slice(2).join('-')
+      if (p) return p
+    }
+
+    const known = [
+      'catppuccin',
+      'gruvbox',
+      'nord',
+      'dracula',
+      'tokyo-night',
+      'one-dark',
+      'solarized',
+      'monokai',
+      'github',
+      'ayu',
+      'material',
+      'rose-pine',
+      'everforest',
+      'kanagawa',
+      'night-owl',
+      'papercolor',
+      'vesper',
+    ]
+    for (const k of known) {
+      if (lower.includes(k)) return k
+    }
+    return 'default'
+  }
+
   const prefersDark = () => {
     try {
       return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
@@ -39,8 +72,15 @@ export function applyTheme(setting: ThemeSetting) {
 
   const dark = mode === 'dark' ? true : mode === 'light' ? false : prefersDark()
 
+  for (const c of Array.from(root.classList)) {
+    if (c.startsWith('palette-')) root.classList.remove(c)
+  }
+
   root.classList.toggle('dark', dark)
   root.classList.toggle('tone-gray', tone === 'gray')
+
+  const palette = toPalette(s)
+  if (palette !== 'default') root.classList.add(`palette-${palette}`)
 }
 
 export function onSystemThemeChange(handler: () => void): (() => void) | null {

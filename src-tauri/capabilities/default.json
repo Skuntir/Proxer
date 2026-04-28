@@ -9,6 +9,7 @@
     "core:webview:default",
     "core:event:default",
     "core:event:allow-unlisten",
-    "core:path:default"
+    "core:path:default",
+    "dialog:allow-open"
   ]
 }

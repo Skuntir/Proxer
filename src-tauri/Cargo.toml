@@ -6,6 +6,7 @@ default-run = "proxer"
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 
 tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "sync"] }
 futures = "0.3"
@@ -36,7 +37,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 sysinfo = "0.33"
 pem = "3"
 dashmap = "6"
-libloading = "0.8"
 cookie = "0.18"
 time = { version = "0.3", features = ["formatting"] }
 regex = "1"

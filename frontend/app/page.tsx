@@ -13,6 +13,10 @@ import {
   interceptGetEnabled,
   interceptSetEnabled,
   onBackendEvent,
+  ProjectStatus,
+  projectOpen,
+  projectStatus,
+  projectUseTemporary,
   settingsGet,
   trafficClear,
   uiHistoryGet,
@@ -20,6 +24,7 @@ import {
 } from '@/lib/proxer'
 import { uiConfirm, uiToastSuccess } from '@/lib/overlays'
 import { applyTheme, onSystemThemeChange } from '@/lib/theme'
+import { applyTypography } from '@/lib/typography'
 import {
   DashboardView,
   TargetView,
@@ -39,6 +44,8 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from '@/components/ui/resizable'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 
 export default function ProxyApp() {
   const [activeNav, setActiveNav] = useState('dashboard')
@@ -48,9 +55,37 @@ export default function ProxyApp() {
   const [selectedRequest, setSelectedRequest] = useState<HttpRequest | null>(null)
   const [requests, setRequests] = useState<HttpRequest[]>([])
   const [showConnectTunnels, setShowConnectTunnels] = useState<boolean>(false)
+  const [projectReady, setProjectReady] = useState(false)
+  const [startupProjectDialogOpen, setStartupProjectDialogOpen] = useState(false)
+  const [startupProjectStatus, setStartupProjectStatus] = useState<ProjectStatus | null>(null)
   const themeSettingRef = useRef<string>('system')
+  const interceptToggleInFlightRef = useRef(false)
 
   useEffect(() => {
+    let cancelled = false
+    projectStatus()
+      .then((st) => {
+        if (cancelled) return
+        setStartupProjectStatus(st)
+        if (st.mode === 'temporary') {
+          setStartupProjectDialogOpen(true)
+          return
+        }
+        setProjectReady(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setProjectReady(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!projectReady) return
+
     let unlisten: (() => void) | null = null
     let cancelled = false
     let unlistenSystem: (() => void) | null = null
@@ -71,6 +106,7 @@ export default function ProxyApp() {
         const s = await settingsGet()
         themeSettingRef.current = s.theme ?? 'system'
         applyTheme(themeSettingRef.current)
+        applyTypography(s)
         setShowConnectTunnels(Boolean(s.showConnectTunnels))
       } catch {}
 
@@ -145,9 +181,12 @@ export default function ProxyApp() {
 
     const onSettingsUpdated = (ev: Event) => {
       const e = ev as CustomEvent
-      const detail = (e.detail || {}) as { showConnectTunnels?: boolean }
+      const detail = (e.detail || {}) as { showConnectTunnels?: boolean; fontSize?: number; fontFamily?: string }
       if (typeof detail.showConnectTunnels === 'boolean') {
         setShowConnectTunnels(detail.showConnectTunnels)
+      }
+      if (typeof detail.fontSize === 'number' || typeof detail.fontFamily === 'string') {
+        applyTypography({ fontSize: detail.fontSize, fontFamily: detail.fontFamily })
       }
     }
 
@@ -161,7 +200,7 @@ export default function ProxyApp() {
       window.removeEventListener('proxer:theme', onThemeEvent)
       window.removeEventListener('skuntir:settings-updated', onSettingsUpdated)
     }
-  }, [])
+  }, [projectReady])
 
   // Filter requests based on search query
   const filteredRequests = useMemo(() => {
@@ -242,6 +281,18 @@ export default function ProxyApp() {
     return () => window.removeEventListener('skuntir:navigate', onNav)
   }, [])
 
+  const setInterceptEnabledSafe = async (enabled: boolean) => {
+    if (interceptToggleInFlightRef.current) return
+    interceptToggleInFlightRef.current = true
+    setInterceptEnabled(enabled)
+    try {
+      const actual = await interceptSetEnabled(enabled)
+      setInterceptEnabled(actual)
+      window.dispatchEvent(new CustomEvent('skuntir:intercept-updated', { detail: { enabled: actual } }))
+    } catch {}
+    interceptToggleInFlightRef.current = false
+  }
+
   const renderWorkspace = () => {
     switch (activeNav) {
       case 'dashboard':
@@ -249,7 +300,7 @@ export default function ProxyApp() {
       case 'target':
         return <TargetView />
       case 'proxy':
-        return <ProxyView />
+        return <ProxyView interceptEnabled={interceptEnabled} onInterceptToggle={setInterceptEnabledSafe} />
       case 'history':
         return (
           <ResizablePanelGroup direction="vertical" className="h-full">
@@ -281,7 +332,7 @@ export default function ProxyApp() {
           </ResizablePanelGroup>
         )
       case 'intercept':
-        return <InterceptView />
+        return <InterceptView interceptEnabled={interceptEnabled} onInterceptToggle={setInterceptEnabledSafe} />
       case 'scanner':
         return <ScannerView />
       case 'intruder':
@@ -303,8 +354,104 @@ export default function ProxyApp() {
     }
   }
 
+  const joinPath = (dir: string, filename: string) => {
+    const trimmed = dir.replace(/[\\/]+$/, '')
+    const sep = trimmed.includes('\\') ? '\\' : '/'
+    return `${trimmed}${sep}${filename}`
+  }
+
+  const pickProjectFolder = async (): Promise<string | null> => {
+    const mod = await import('@tauri-apps/plugin-dialog')
+    const picked = await mod.open({
+      title: 'Select a project folder',
+      directory: true,
+      multiple: false,
+    })
+    if (!picked) return null
+    if (typeof picked === 'string') return picked
+    if (Array.isArray(picked) && typeof picked[0] === 'string') return picked[0]
+    return null
+  }
+
   return (
     <div className="h-screen flex bg-background">
+      <Dialog open={startupProjectDialogOpen}>
+        <DialogContent
+          showCloseButton={false}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle>Start a session</DialogTitle>
+            <DialogDescription>
+              Continue in a temporary session, or create/open a project on disk.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3">
+            {startupProjectStatus?.recentPath && (
+              <Button
+                variant="default"
+                onClick={() => {
+                  const p = startupProjectStatus.recentPath
+                  if (!p) return
+                  projectOpen(p)
+                    .then(() => window.location.reload())
+                    .catch(() => {})
+                }}
+              >
+                Open recent project
+              </Button>
+            )}
+
+            <Button
+              variant="outline"
+              onClick={() => {
+                projectUseTemporary()
+                  .then((st) => {
+                    setStartupProjectStatus(st)
+                    setStartupProjectDialogOpen(false)
+                    setProjectReady(true)
+                  })
+                  .catch(() => {
+                    setStartupProjectDialogOpen(false)
+                    setProjectReady(true)
+                  })
+              }}
+            >
+              Continue without a project
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => {
+                pickProjectFolder()
+                  .then((dir) => {
+                    if (!dir) return
+                    return projectOpen(joinPath(dir, 'proxer.db')).then(() => window.location.reload())
+                  })
+                  .catch(() => {})
+              }}
+            >
+              Open project folder…
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => {
+                pickProjectFolder()
+                  .then((dir) => {
+                    if (!dir) return
+                    return projectOpen(joinPath(dir, 'proxer.db')).then(() => window.location.reload())
+                  })
+                  .catch(() => {})
+              }}
+            >
+              Create project in folder…
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {/* Sidebar */}
       <AppSidebar
         activeItem={activeNav}
@@ -318,16 +465,15 @@ export default function ProxyApp() {
         {/* Top bar */}
         <TopBar
           interceptEnabled={interceptEnabled}
-          onInterceptToggle={async (enabled) => {
-            setInterceptEnabled(enabled)
-            try {
-              const actual = await interceptSetEnabled(enabled)
-              setInterceptEnabled(actual)
-            } catch {}
-          }}
+          onInterceptToggle={setInterceptEnabledSafe}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           canClearTraffic={requests.length > 0}
+          onVisualClear={() => {
+            setSelectedRequest(null)
+            setRequests([])
+            window.dispatchEvent(new CustomEvent('skuntir:visual-clear', { detail: { tsMs: Date.now() } }))
+          }}
           onClearTraffic={() => {
             uiConfirm({
               title: 'Clear captured traffic?',

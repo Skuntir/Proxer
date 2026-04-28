@@ -68,3 +68,16 @@ Theme controls:
 
 Reduces spacing in the UI.
 
+### Show examples
+
+Controls whether tools like Intruder, Repeater, and Comparer show example templates in their editors.
+
+## Projects and sessions
+
+Proxer runs in one of two modes:
+
+- Temporary session: uses a database in your OS temp directory. This does not auto reopen on restart.
+- Project on disk: uses a `proxer.db` file inside a folder you choose.
+
+Clearing traffic affects only the current session or project database.
+

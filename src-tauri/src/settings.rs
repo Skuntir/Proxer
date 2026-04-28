@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, Result},
     events::now_ms,
-    storage::SqliteStore,
+    storage::StoreHandle,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +13,8 @@ pub struct UiSettings {
     pub font_size: i64,
     pub font_family: String,
     pub compact_mode: bool,
+    #[serde(default = "default_show_examples")]
+    pub show_examples: bool,
     pub project_name: String,
     pub auto_save: bool,
     pub max_history_items: i64,
@@ -39,6 +39,10 @@ fn default_scope_regex() -> String {
     "^$".into()
 }
 
+fn default_show_examples() -> bool {
+    true
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
@@ -46,6 +50,7 @@ impl Default for UiSettings {
             font_size: 12,
             font_family: "mono".into(),
             compact_mode: false,
+            show_examples: true,
             project_name: "Proxer".into(),
             auto_save: true,
             max_history_items: 10000,
@@ -66,18 +71,19 @@ impl Default for UiSettings {
 }
 
 pub struct SettingsManager {
-    store: Arc<SqliteStore>,
+    store: StoreHandle,
 }
 
 impl SettingsManager {
     const KEY: &'static str = "settings";
 
-    pub fn new(store: Arc<SqliteStore>) -> Self {
+    pub fn new(store: StoreHandle) -> Self {
         Self { store }
     }
 
     pub async fn get(&self) -> Result<UiSettings> {
-        let Some(raw) = self.store.setting_get(Self::KEY).await? else {
+        let store = self.store.get();
+        let Some(raw) = store.setting_get(Self::KEY).await? else {
             return Ok(UiSettings::default());
         };
         serde_json::from_str::<UiSettings>(&raw).map_err(|e| AppError::Other(format!("invalid settings json: {e}")))
@@ -89,7 +95,8 @@ impl SettingsManager {
         merge_json(&mut base, patch);
         let next = serde_json::from_value::<UiSettings>(base).map_err(|e| AppError::InvalidInput(format!("invalid settings patch: {e}")))?;
         let raw = serde_json::to_string(&next).map_err(|e| AppError::Other(e.to_string()))?;
-        self.store
+        let store = self.store.get();
+        store
             .setting_set(Self::KEY, &raw, now_ms())
             .await?;
         Ok(next)

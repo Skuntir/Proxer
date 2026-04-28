@@ -95,6 +95,7 @@ export type Settings = {
   fontSize: number
   fontFamily: string
   compactMode: boolean
+  showExamples: boolean
   projectName: string
   autoSave: boolean
   maxHistoryItems: number
@@ -238,6 +239,7 @@ export type IntruderStartRequest = {
   attackType: string
   templateRaw: string
   payloads: string[]
+  payloadSets?: string[][]
 }
 
 export type IntruderStartResponse = {
@@ -394,7 +396,25 @@ export type RepeaterSendResult = {
 }
 
 export async function repeaterSendRaw(rawRequest: string): Promise<RepeaterSendResult> {
-  return invoke<RepeaterSendResult>('repeater_send_raw', { raw_request: rawRequest })
+  return invoke<RepeaterSendResult>('repeater_send_raw', { rawRequest })
+}
+
+export type ProjectStatus = {
+  mode: 'temporary' | 'project' | string
+  path?: string | null
+  recentPath?: string | null
+}
+
+export async function projectStatus(): Promise<ProjectStatus> {
+  return invoke<ProjectStatus>('project_status')
+}
+
+export async function projectUseTemporary(): Promise<ProjectStatus> {
+  return invoke<ProjectStatus>('project_use_temporary')
+}
+
+export async function projectOpen(path: string): Promise<ProjectStatus> {
+  return invoke<ProjectStatus>('project_open', { path })
 }
 
 export async function interceptGetEnabled(): Promise<boolean> {

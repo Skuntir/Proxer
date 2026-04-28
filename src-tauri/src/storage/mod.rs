@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use sqlx::{
@@ -22,6 +25,10 @@ impl SqliteStore {
         let db_path = app
             .path()
             .resolve("proxer/proxer.db", BaseDirectory::AppData)?;
+        Self::open_at(db_path).await
+    }
+
+    pub async fn open_at(db_path: PathBuf) -> tauri::Result<Self> {
 
         if let Some(parent) = db_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
@@ -957,6 +964,32 @@ impl SqliteStore {
             ));
         }
         Ok(out)
+    }
+}
+
+#[derive(Clone)]
+pub struct StoreHandle {
+    inner: Arc<RwLock<Arc<SqliteStore>>>,
+}
+
+impl StoreHandle {
+    pub fn new(store: Arc<SqliteStore>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(store)),
+        }
+    }
+
+    pub fn get(&self) -> Arc<SqliteStore> {
+        self.inner
+            .read()
+            .map(|s| s.clone())
+            .unwrap_or_else(|e| e.into_inner().clone())
+    }
+
+    pub fn swap(&self, next: Arc<SqliteStore>) {
+        if let Ok(mut w) = self.inner.write() {
+            *w = next;
+        }
     }
 }
 

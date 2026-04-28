@@ -27,8 +27,12 @@ coverage/
 
 *.tsbuildinfo
 
+frontend/.eslintcache
+frontend/.swc/
+
 src-tauri/target/
 src-tauri/gen/
+src-tauri/.tauri/
 
 *.db
 *.sqlite

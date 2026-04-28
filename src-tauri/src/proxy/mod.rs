@@ -31,7 +31,7 @@ use crate::{
     intercept::{apply_raw_edit, InterceptManager, InterceptDecision},
     rules::RuleSet,
     settings::SettingsManager,
-    storage::SqliteStore,
+    storage::StoreHandle,
     tls::TlsManager,
 };
 
@@ -165,7 +165,7 @@ pub struct ProxyStatus {
 pub struct ProxyEngine {
     _app: tauri::AppHandle,
     pub events: EventBus,
-    store: Arc<SqliteStore>,
+    store: StoreHandle,
     settings: Arc<SettingsManager>,
     rules: Arc<RuleSet>,
     tls: Arc<TlsManager>,
@@ -183,7 +183,7 @@ impl ProxyEngine {
     pub fn new(
         app: tauri::AppHandle,
         events: EventBus,
-        store: Arc<SqliteStore>,
+        store: StoreHandle,
         settings: Arc<SettingsManager>,
         rules: Arc<RuleSet>,
         tls: Arc<TlsManager>,
@@ -340,10 +340,8 @@ impl ProxyService {
             elapsed_ms: 0,
         };
 
-        self.engine
-            .store
-            .insert(&proxy_req, Some(&proxy_resp), None)
-            .await?;
+        let store = self.engine.store.get();
+        store.insert(&proxy_req, Some(&proxy_resp), None).await?;
 
         self.engine.events.emit(BackendEvent::ResponseReceived {
             ts_ms: now_ms(),
@@ -470,7 +468,8 @@ impl ProxyService {
                     }
                     InterceptDecision::Drop => {
                         let reason = "dropped by intercept".to_string();
-                        self.engine.store.insert(&proxy_req, None, Some(&reason)).await?;
+                        let store = self.engine.store.get();
+                        store.insert(&proxy_req, None, Some(&reason)).await?;
                         return Ok(Response::builder()
                             .status(StatusCode::FORBIDDEN)
                             .body(Full::new(Bytes::from(reason)))?);
@@ -484,10 +483,8 @@ impl ProxyService {
             tokio::time::sleep(Duration::from_millis(decision.delay_ms)).await;
         }
         if let Some(reason) = decision.blocked_reason {
-            self.engine
-                .store
-                .insert(&proxy_req, None, Some(&reason))
-                .await?;
+            let store = self.engine.store.get();
+            store.insert(&proxy_req, None, Some(&reason)).await?;
             return Ok(Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Full::new(Bytes::from(reason)))?);
@@ -511,16 +508,15 @@ impl ProxyService {
                     elapsed_ms: proxy_resp.elapsed_ms,
                 });
 
-                self.engine
-                    .store
-                    .insert(&proxy_req, Some(&proxy_resp), None)
-                    .await?;
+                let store = self.engine.store.get();
+                store.insert(&proxy_req, Some(&proxy_resp), None).await?;
 
                 Ok(build_client_response(&proxy_resp)?)
             }
             Err(e) => {
                 let err = e.to_string();
-                self.engine.store.insert(&proxy_req, None, Some(&err)).await?;
+                let store = self.engine.store.get();
+                store.insert(&proxy_req, None, Some(&err)).await?;
                 let elapsed = started.elapsed().as_millis() as u64;
                 self.engine.events.emit(BackendEvent::ResponseReceived {
                     ts_ms: now_ms(),
@@ -602,7 +598,8 @@ impl ProxyEngine {
             tokio::time::sleep(Duration::from_millis(decision.delay_ms)).await;
         }
         if let Some(reason) = decision.blocked_reason {
-            self.store.insert(&original, None, Some(&reason)).await?;
+            let store = self.store.get();
+            store.insert(&original, None, Some(&reason)).await?;
             return Ok(original.id);
         }
 
@@ -620,7 +617,8 @@ impl ProxyEngine {
             elapsed_ms: resp.elapsed_ms,
         });
 
-        self.store.insert(&original, Some(&resp), None).await?;
+        let store = self.store.get();
+        store.insert(&original, Some(&resp), None).await?;
         Ok(original.id)
     }
 }
