@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -13,25 +14,32 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{
     body::Incoming,
-    header::{HeaderName, CONNECTION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE},
+    header::{
+        HeaderName, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, TE, TRAILER,
+        TRANSFER_ENCODING, UPGRADE,
+    },
     http::uri::PathAndQuery,
     Method, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
+use regex::Regex;
+use sha1::{Digest, Sha1};
 use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{oneshot, Mutex},
 };
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_socks::tcp::Socks5Stream;
 use url::Url;
 use uuid::Uuid;
-use regex::Regex;
 
 use crate::{
     error::{AppError, Result},
     events::{now_ms, BackendEvent, EventBus},
+    fingerprint,
     http_types::{HeaderPair, ProxyRequest, ProxyResponse},
-    intercept::{apply_raw_edit, InterceptManager, InterceptDecision},
+    intercept::{apply_raw_edit, InterceptDecision, InterceptManager},
     rules::RuleSet,
     settings::SettingsManager,
     storage::StoreHandle,
@@ -121,9 +129,10 @@ impl ProxyManager {
             thread,
         });
 
-        self.engine
-            .events
-            .emit(BackendEvent::proxy_status_changed(true, Some(bind.to_string())));
+        self.engine.events.emit(BackendEvent::proxy_status_changed(
+            true,
+            Some(bind.to_string()),
+        ));
 
         Ok(bind)
     }
@@ -173,8 +182,6 @@ pub struct ProxyEngine {
     rules: Arc<RuleSet>,
     tls: Arc<TlsManager>,
     intercept: Arc<InterceptManager>,
-    client: reqwest::Client,
-    insecure_client: reqwest::Client,
     persisted_count: Arc<AtomicU64>,
 }
 
@@ -194,18 +201,6 @@ impl ProxyEngine {
         tls: Arc<TlsManager>,
         intercept: Arc<InterceptManager>,
     ) -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        let insecure_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .danger_accept_invalid_certs(true)
-            .build()
-            .unwrap_or_else(|_| client.clone());
-
         Self {
             _app: app,
             events,
@@ -214,8 +209,6 @@ impl ProxyEngine {
             rules,
             tls,
             intercept,
-            client,
-            insecure_client,
             persisted_count: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -256,13 +249,15 @@ impl ProxyEngine {
             rules: self.rules.clone(),
             tls: self.tls.clone(),
             intercept: self.intercept.clone(),
-            client: self.client.clone(),
-            insecure_client: self.insecure_client.clone(),
             persisted_count: self.persisted_count.clone(),
         }
     }
 
-    async fn serve_mitm_connection(&self, stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static, host: String) -> Result<()> {
+    async fn serve_mitm_connection(
+        &self,
+        stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        host: String,
+    ) -> Result<()> {
         let io = TokioIo::new(stream);
         let engine = Arc::new(self.clone_shallow());
         let ctx = ConnCtx {
@@ -297,7 +292,10 @@ struct ProxyService {
 }
 
 impl ProxyService {
-    async fn handle(self, req: Request<Incoming>) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
+    async fn handle(
+        self,
+        req: Request<Incoming>,
+    ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
         let res = match *req.method() {
             Method::CONNECT => self.handle_connect(req).await,
             _ => self.handle_forward(req).await,
@@ -320,11 +318,7 @@ impl ProxyService {
             .as_str()
             .to_string();
 
-        let host = authority
-            .split(':')
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let host = authority.split(':').next().unwrap_or("").to_string();
 
         let proxy_req = ProxyRequest {
             id,
@@ -394,13 +388,20 @@ impl ProxyService {
             if let Ok(upgraded) = on_upgrade.await {
                 match acceptor.accept(TokioIo::new(upgraded)).await {
                     Ok(tls_stream) => {
-                        engine.tls.emit_tls_handshake(host, "mitm".into(), true, None);
-                        let _ = engine.serve_mitm_connection(tls_stream, authority_clone).await;
-                    }
-                    Err(e) => {
                         engine
                             .tls
-                            .emit_tls_handshake(host, "mitm".into(), false, Some(e.to_string()));
+                            .emit_tls_handshake(host, "mitm".into(), true, None);
+                        let _ = engine
+                            .serve_mitm_connection(tls_stream, authority_clone)
+                            .await;
+                    }
+                    Err(e) => {
+                        engine.tls.emit_tls_handshake(
+                            host,
+                            "mitm".into(),
+                            false,
+                            Some(e.to_string()),
+                        );
                     }
                 }
             }
@@ -411,11 +412,16 @@ impl ProxyService {
             .body(Full::new(Bytes::new()))?)
     }
 
-    async fn tunnel_passthrough(&self, req: Request<Incoming>, authority: String) -> Result<Response<Full<Bytes>>> {
+    async fn tunnel_passthrough(
+        &self,
+        req: Request<Incoming>,
+        authority: String,
+    ) -> Result<Response<Full<Bytes>>> {
         let on_upgrade = hyper::upgrade::on(req);
+        let engine = self.engine.clone();
         tokio::task::spawn_local(async move {
             if let Ok(upgraded) = on_upgrade.await {
-                let _ = tunnel_bytes(upgraded, authority).await;
+                let _ = engine.tunnel_bytes(upgraded, authority).await;
             }
         });
 
@@ -424,7 +430,7 @@ impl ProxyService {
             .body(Full::new(Bytes::new()))?)
     }
 
-    async fn handle_forward(&self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>> {
+    async fn handle_forward(&self, mut req: Request<Incoming>) -> Result<Response<Full<Bytes>>> {
         let started_ms = now_ms();
         let started = Instant::now();
         let id = Uuid::new_v4();
@@ -432,6 +438,12 @@ impl ProxyService {
         let (scheme, host, url) = resolve_target(&req, &self.ctx)?;
         let method = req.method().to_string();
         let headers = headers_to_pairs(req.headers());
+        let websocket_upgrade = is_websocket_upgrade(&headers);
+        let on_upgrade = if websocket_upgrade {
+            Some(hyper::upgrade::on(&mut req))
+        } else {
+            None
+        };
 
         let body_bytes = req
             .into_body()
@@ -452,18 +464,6 @@ impl ProxyService {
             body: body_bytes,
         };
 
-        let preview = preview_b64(&proxy_req.body);
-        self.engine.events.emit(BackendEvent::RequestCaptured {
-            ts_ms: started_ms,
-            id: id.to_string(),
-            method: proxy_req.method.clone(),
-            url: proxy_req.url.clone(),
-            host: host.clone(),
-            scheme: scheme.clone(),
-            request_bytes: proxy_req.body.len(),
-            preview_base64: preview,
-        });
-
         let in_scope = self
             .engine
             .settings
@@ -483,9 +483,27 @@ impl ProxyService {
                     }
                     InterceptDecision::Drop => {
                         let reason = "dropped by intercept".to_string();
+                        self.engine.events.emit(BackendEvent::RequestCaptured {
+                            ts_ms: started_ms,
+                            id: id.to_string(),
+                            method: proxy_req.method.clone(),
+                            url: proxy_req.url.clone(),
+                            host: proxy_req.host.clone(),
+                            scheme: proxy_req.scheme.clone(),
+                            request_bytes: proxy_req.body.len(),
+                            preview_base64: preview_b64(&proxy_req.body),
+                        });
                         self.engine
                             .persist_traffic(&proxy_req, None, Some(&reason))
                             .await?;
+                        self.engine.events.emit(BackendEvent::ResponseReceived {
+                            ts_ms: now_ms(),
+                            id: id.to_string(),
+                            status: StatusCode::FORBIDDEN.as_u16(),
+                            response_bytes: reason.len(),
+                            preview_base64: preview_b64(reason.as_bytes()),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                        });
                         return Ok(Response::builder()
                             .status(StatusCode::FORBIDDEN)
                             .body(Full::new(Bytes::from(reason)))?);
@@ -493,6 +511,17 @@ impl ProxyService {
                 }
             }
         }
+
+        self.engine.events.emit(BackendEvent::RequestCaptured {
+            ts_ms: started_ms,
+            id: id.to_string(),
+            method: proxy_req.method.clone(),
+            url: proxy_req.url.clone(),
+            host: proxy_req.host.clone(),
+            scheme: proxy_req.scheme.clone(),
+            request_bytes: proxy_req.body.len(),
+            preview_base64: preview_b64(&proxy_req.body),
+        });
 
         let decision = self.engine.rules.apply_request(&mut proxy_req).await;
         if decision.delay_ms > 0 {
@@ -505,6 +534,10 @@ impl ProxyService {
             return Ok(Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Full::new(Bytes::from(reason)))?);
+        }
+
+        if let Some(on_upgrade) = on_upgrade {
+            return self.handle_websocket(proxy_req, started, on_upgrade).await;
         }
 
         let upstream = self.engine.send_upstream(&proxy_req).await;
@@ -551,7 +584,101 @@ impl ProxyService {
             }
         }
     }
+
+    async fn handle_websocket(
+        &self,
+        proxy_req: ProxyRequest,
+        started: Instant,
+        on_upgrade: hyper::upgrade::OnUpgrade,
+    ) -> Result<Response<Full<Bytes>>> {
+        let upstream = self.engine.open_websocket_upstream(&proxy_req).await;
+        match upstream {
+            Ok(ws) => {
+                let accept = websocket_accept_value(&proxy_req)
+                    .ok_or_else(|| AppError::InvalidInput("missing Sec-WebSocket-Key".into()))?;
+                let proxy_resp = ProxyResponse {
+                    status: StatusCode::SWITCHING_PROTOCOLS.as_u16(),
+                    headers: ws.response_headers.clone(),
+                    body: Vec::new(),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                };
+                self.engine.events.emit(BackendEvent::ResponseReceived {
+                    ts_ms: now_ms(),
+                    id: proxy_req.id.to_string(),
+                    status: proxy_resp.status,
+                    response_bytes: 0,
+                    preview_base64: String::new(),
+                    elapsed_ms: proxy_resp.elapsed_ms,
+                });
+                self.engine
+                    .persist_traffic(&proxy_req, Some(&proxy_resp), None)
+                    .await?;
+
+                let mut builder = Response::builder().status(StatusCode::SWITCHING_PROTOCOLS);
+                {
+                    let headers = builder
+                        .headers_mut()
+                        .ok_or_else(|| AppError::Other("response builder headers".into()))?;
+                    headers.insert(
+                        CONNECTION,
+                        hyper::header::HeaderValue::from_static("Upgrade"),
+                    );
+                    headers.insert(
+                        UPGRADE,
+                        hyper::header::HeaderValue::from_static("websocket"),
+                    );
+                    headers.insert(
+                        SEC_WEBSOCKET_ACCEPT,
+                        hyper::header::HeaderValue::from_str(&accept)
+                            .map_err(|e| AppError::Other(e.to_string()))?,
+                    );
+                    for h in &ws.response_headers {
+                        if h.name.eq_ignore_ascii_case("sec-websocket-accept")
+                            || h.name.eq_ignore_ascii_case(CONNECTION.as_str())
+                            || h.name.eq_ignore_ascii_case(UPGRADE.as_str())
+                            || is_hop_header(&h.name)
+                        {
+                            continue;
+                        }
+                        if let (Ok(name), Ok(value)) = (
+                            HeaderName::from_bytes(h.name.as_bytes()),
+                            hyper::header::HeaderValue::from_str(&h.value),
+                        ) {
+                            headers.insert(name, value);
+                        }
+                    }
+                }
+
+                tokio::task::spawn_local(async move {
+                    if let Ok(upgraded) = on_upgrade.await {
+                        let mut client = TokioIo::new(upgraded);
+                        let mut upstream = ws.stream;
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                    }
+                });
+
+                Ok(builder.body(Full::new(Bytes::new()))?)
+            }
+            Err(e) => {
+                let err = e.to_string();
+                self.engine
+                    .persist_traffic(&proxy_req, None, Some(&err))
+                    .await?;
+                Ok(Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Full::new(Bytes::from(err)))?)
+            }
+        }
+    }
 }
+
+struct WebSocketUpstream {
+    stream: Box<dyn AsyncReadWrite>,
+    response_headers: Vec<HeaderPair>,
+}
+
+trait AsyncReadWrite: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T> AsyncReadWrite for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl ProxyEngine {
     async fn send_upstream(&self, req: &ProxyRequest) -> Result<ProxyResponse> {
@@ -562,11 +689,98 @@ impl ProxyEngine {
 
         let settings = self.settings.get().await.unwrap_or_default();
         let timeout_secs = settings.request_timeout_seconds.clamp(1, 300) as u64;
-        let client = if settings.verify_certificates {
-            &self.client
-        } else {
-            &self.insecure_client
-        };
+
+        if settings.tls_fingerprint_enabled {
+            let imp = fingerprint::primp_profile(&settings.tls_fingerprint_profile)?;
+            let os = fingerprint::primp_os(&settings.tls_fingerprint_os)?;
+            let mut builder = primp::Client::builder()
+                .redirect(primp::redirect::Policy::none())
+                .timeout(Duration::from_secs(timeout_secs))
+                .connect_timeout(Duration::from_secs(timeout_secs))
+                .impersonate(imp)
+                .impersonate_os(os);
+            if !settings.verify_certificates {
+                builder = builder.danger_accept_invalid_certs(true);
+            }
+            if settings.upstream_proxy_enabled {
+                if settings.upstream_proxy_url.trim().is_empty() {
+                    return Err(AppError::InvalidInput(
+                        "upstream proxy URL is required when upstream proxy is enabled".into(),
+                    ));
+                }
+                let proxy = primp::Proxy::all(settings.upstream_proxy_url.trim())
+                    .map_err(|e| AppError::InvalidInput(format!("invalid upstream proxy: {e}")))?;
+                builder = builder.proxy(proxy);
+            } else {
+                builder = builder.no_proxy();
+            }
+            let client = builder
+                .build()
+                .map_err(|e| AppError::Other(format!("primp client: {e}")))?;
+            let method = primp::Method::from_bytes(req.method.as_bytes()).map_err(|_| {
+                AppError::InvalidInput(format!("unsupported method {}", req.method))
+            })?;
+            let mut builder = client
+                .request(method, &req.url)
+                .timeout(Duration::from_secs(timeout_secs))
+                .body(req.body.clone());
+
+            for h in &req.headers {
+                if is_hop_header(&h.name) || h.name.eq_ignore_ascii_case("host") {
+                    continue;
+                }
+                if let (Ok(name), Ok(value)) = (
+                    primp::header::HeaderName::from_bytes(h.name.as_bytes()),
+                    primp::header::HeaderValue::from_str(&h.value),
+                ) {
+                    builder = builder.header(name, value);
+                }
+            }
+
+            let resp = builder
+                .send()
+                .await
+                .map_err(|e| AppError::Other(format!("primp request: {e}")))?;
+            let status = resp.status().as_u16();
+            let headers = resp
+                .headers()
+                .iter()
+                .map(|(k, v)| HeaderPair {
+                    name: k.as_str().to_string(),
+                    value: v.to_str().unwrap_or("").to_string(),
+                })
+                .collect::<Vec<_>>();
+            let body = resp
+                .bytes()
+                .await
+                .map_err(|e| AppError::Other(format!("primp body: {e}")))?
+                .to_vec();
+
+            return Ok(ProxyResponse {
+                status,
+                headers,
+                body,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            });
+        }
+
+        let mut client_builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy();
+        if !settings.verify_certificates {
+            client_builder = client_builder.danger_accept_invalid_certs(true);
+        }
+        if settings.upstream_proxy_enabled {
+            if settings.upstream_proxy_url.trim().is_empty() {
+                return Err(AppError::InvalidInput(
+                    "upstream proxy URL is required when upstream proxy is enabled".into(),
+                ));
+            }
+            let proxy = reqwest::Proxy::all(settings.upstream_proxy_url.trim())
+                .map_err(|e| AppError::InvalidInput(format!("invalid upstream proxy: {e}")))?;
+            client_builder = client_builder.proxy(proxy);
+        }
+        let client = client_builder.build()?;
 
         let mut builder = client
             .request(method, &req.url)
@@ -605,6 +819,57 @@ impl ProxyEngine {
             headers,
             body,
             elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    async fn open_websocket_upstream(&self, req: &ProxyRequest) -> Result<WebSocketUpstream> {
+        let settings = self.settings.get().await.unwrap_or_default();
+        let parsed = Url::parse(&req.url)
+            .map_err(|e| AppError::InvalidInput(format!("invalid websocket url: {e}")))?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| AppError::InvalidInput("websocket URL missing host".into()))?;
+        let port = parsed
+            .port_or_known_default()
+            .ok_or_else(|| AppError::InvalidInput("websocket URL missing port".into()))?;
+        let authority = format!("{host}:{port}");
+        let mut stream: Box<dyn AsyncReadWrite> = if settings.upstream_proxy_enabled {
+            if settings.upstream_proxy_url.trim().is_empty() {
+                return Err(AppError::InvalidInput(
+                    "upstream proxy URL is required when upstream proxy is enabled".into(),
+                ));
+            }
+            connect_via_upstream_proxy(&settings.upstream_proxy_url, &authority).await?
+        } else {
+            Box::new(TcpStream::connect(&authority).await?)
+        };
+
+        if parsed.scheme() == "https" || parsed.scheme() == "wss" {
+            let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+                .map_err(|_| AppError::InvalidInput("invalid websocket SNI host".into()))?;
+            let config = client_tls_config(settings.verify_certificates);
+            let tls = TlsConnector::from(Arc::new(config))
+                .connect(server_name, stream)
+                .await
+                .map_err(|e| AppError::Tls(e.to_string()))?;
+            stream = Box::new(tls);
+        }
+
+        let raw = render_upstream_request(req, &parsed);
+        stream.write_all(raw.as_bytes()).await?;
+        stream.flush().await?;
+
+        let response = read_http_head(&mut stream).await?;
+        let (status, headers) = parse_response_head(&response)?;
+        if status != StatusCode::SWITCHING_PROTOCOLS.as_u16() {
+            return Err(AppError::Other(format!(
+                "websocket upstream rejected upgrade with status {status}"
+            )));
+        }
+
+        Ok(WebSocketUpstream {
+            stream,
+            response_headers: headers,
         })
     }
 
@@ -674,9 +939,12 @@ impl ProxyEngine {
 }
 
 fn build_client_response(resp: &ProxyResponse) -> Result<Response<Full<Bytes>>> {
-    let mut builder = Response::builder().status(StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK));
+    let mut builder =
+        Response::builder().status(StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK));
     {
-        let headers = builder.headers_mut().ok_or_else(|| AppError::Other("response builder headers".into()))?;
+        let headers = builder
+            .headers_mut()
+            .ok_or_else(|| AppError::Other("response builder headers".into()))?;
         for h in &resp.headers {
             if is_hop_header(&h.name) {
                 continue;
@@ -726,6 +994,259 @@ fn is_hop_header(name: &str) -> bool {
         || name.eq_ignore_ascii_case(TRANSFER_ENCODING.as_str())
         || name.eq_ignore_ascii_case(UPGRADE.as_str())
         || name.eq_ignore_ascii_case("keep-alive")
+}
+
+fn is_websocket_upgrade(headers: &[HeaderPair]) -> bool {
+    let has_upgrade = headers.iter().any(|h| {
+        h.name.eq_ignore_ascii_case(UPGRADE.as_str()) && h.value.eq_ignore_ascii_case("websocket")
+    });
+    let has_connection_upgrade = headers.iter().any(|h| {
+        h.name.eq_ignore_ascii_case(CONNECTION.as_str())
+            && h.value
+                .split(',')
+                .any(|v| v.trim().eq_ignore_ascii_case("upgrade"))
+    });
+    has_upgrade && has_connection_upgrade
+}
+
+fn websocket_accept_value(req: &ProxyRequest) -> Option<String> {
+    let key = req
+        .headers
+        .iter()
+        .find(|h| h.name.eq_ignore_ascii_case(SEC_WEBSOCKET_KEY.as_str()))?
+        .value
+        .trim();
+    let mut sha = Sha1::new();
+    sha.update(key.as_bytes());
+    sha.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    Some(B64.encode(sha.finalize()))
+}
+
+fn render_upstream_request(req: &ProxyRequest, parsed: &Url) -> String {
+    let path = {
+        let mut out = parsed.path().to_string();
+        if out.is_empty() {
+            out.push('/');
+        }
+        if let Some(q) = parsed.query() {
+            out.push('?');
+            out.push_str(q);
+        }
+        out
+    };
+
+    let mut out = String::new();
+    out.push_str(&format!("{} {} HTTP/1.1\r\n", req.method, path));
+    if !req
+        .headers
+        .iter()
+        .any(|h| h.name.eq_ignore_ascii_case("host"))
+    {
+        out.push_str("Host: ");
+        out.push_str(&req.host);
+        out.push_str("\r\n");
+    }
+    for h in &req.headers {
+        if h.name.eq_ignore_ascii_case("proxy-connection") {
+            continue;
+        }
+        out.push_str(&h.name);
+        out.push_str(": ");
+        out.push_str(&h.value);
+        out.push_str("\r\n");
+    }
+    out.push_str("\r\n");
+    out
+}
+
+async fn read_http_head(stream: &mut Box<dyn AsyncReadWrite>) -> Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(2048);
+    let mut tmp = [0_u8; 1024];
+    loop {
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            return Err(AppError::Other(
+                "upstream closed before response headers".into(),
+            ));
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            return Ok(buf);
+        }
+        if buf.len() > 64 * 1024 {
+            return Err(AppError::Other(
+                "upstream response headers too large".into(),
+            ));
+        }
+    }
+}
+
+fn parse_response_head(buf: &[u8]) -> Result<(u16, Vec<HeaderPair>)> {
+    let end = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| AppError::Other("invalid response head".into()))?;
+    let head = String::from_utf8_lossy(&buf[..end]);
+    let mut lines = head.lines();
+    let status_line = lines.next().unwrap_or_default();
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or_else(|| AppError::Other("invalid websocket response status".into()))?;
+    let headers = lines
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some(HeaderPair {
+                name: name.trim().to_string(),
+                value: value.trim().to_string(),
+            })
+        })
+        .collect();
+    Ok((status, headers))
+}
+
+async fn connect_via_upstream_proxy(
+    proxy_url: &str,
+    authority: &str,
+) -> Result<Box<dyn AsyncReadWrite>> {
+    let proxy = Url::parse(proxy_url)
+        .map_err(|_| AppError::InvalidInput("invalid upstream proxy URL".into()))?;
+    match proxy.scheme() {
+        "http" | "https" => {
+            let host = proxy
+                .host_str()
+                .ok_or_else(|| AppError::InvalidInput("upstream proxy missing host".into()))?;
+            let port = proxy
+                .port_or_known_default()
+                .unwrap_or(if proxy.scheme() == "https" { 443 } else { 80 });
+            let mut stream: Box<dyn AsyncReadWrite> =
+                Box::new(TcpStream::connect(format!("{host}:{port}")).await?);
+            if proxy.scheme() == "https" {
+                let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+                    .map_err(|_| {
+                        AppError::InvalidInput("invalid upstream proxy SNI host".into())
+                    })?;
+                let tls = TlsConnector::from(Arc::new(client_tls_config(true)))
+                    .connect(server_name, stream)
+                    .await
+                    .map_err(|e| AppError::Tls(e.to_string()))?;
+                stream = Box::new(tls);
+            }
+
+            let auth = proxy_auth_header(&proxy);
+            let mut req = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
+            if let Some(auth) = auth {
+                req.push_str("Proxy-Authorization: Basic ");
+                req.push_str(&auth);
+                req.push_str("\r\n");
+            }
+            req.push_str("\r\n");
+            stream.write_all(req.as_bytes()).await?;
+            stream.flush().await?;
+            let head = read_http_head(&mut stream).await?;
+            let (status, _) = parse_response_head(&head)?;
+            if status / 100 != 2 {
+                return Err(AppError::Other(format!(
+                    "upstream proxy CONNECT failed with status {status}"
+                )));
+            }
+            Ok(stream)
+        }
+        "socks5" | "socks5h" => {
+            let proxy_host = proxy
+                .host_str()
+                .ok_or_else(|| AppError::InvalidInput("upstream proxy missing host".into()))?;
+            let proxy_port = proxy.port_or_known_default().unwrap_or(1080);
+            let user = proxy.username();
+            let pass = proxy.password().unwrap_or("");
+            let proxy_addr = format!("{proxy_host}:{proxy_port}");
+            let stream = if user.is_empty() {
+                Socks5Stream::connect(proxy_addr.as_str(), authority)
+                    .await
+                    .map_err(|e| AppError::Other(format!("SOCKS upstream connect failed: {e}")))?
+            } else {
+                Socks5Stream::connect_with_password(proxy_addr.as_str(), authority, user, pass)
+                    .await
+                    .map_err(|e| AppError::Other(format!("SOCKS upstream connect failed: {e}")))?
+            };
+            Ok(Box::new(stream.into_inner()))
+        }
+        _ => Err(AppError::InvalidInput(
+            "unsupported upstream proxy scheme".into(),
+        )),
+    }
+}
+
+fn proxy_auth_header(proxy: &Url) -> Option<String> {
+    let user = proxy.username();
+    if user.is_empty() {
+        return None;
+    }
+    let password = proxy.password().unwrap_or("");
+    Some(B64.encode(format!("{user}:{password}")))
+}
+
+fn client_tls_config(_verify_certificates: bool) -> rustls::ClientConfig {
+    let root_store =
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    if !_verify_certificates {
+        config
+            .dangerous()
+            .set_certificate_verifier(Arc::new(NoCertificateVerification));
+    }
+    config
+}
+
+#[derive(Debug)]
+struct NoCertificateVerification;
+
+impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+        ]
+    }
 }
 
 fn host_in_scope(host: &str, scope_regex: &str) -> bool {
@@ -791,9 +1312,25 @@ fn resolve_target(req: &Request<Incoming>, ctx: &ConnCtx) -> Result<(String, Str
     Ok(("http".into(), host, url))
 }
 
-async fn tunnel_bytes(client: hyper::upgrade::Upgraded, authority: String) -> Result<()> {
-    let mut client = TokioIo::new(client);
-    let mut upstream = TcpStream::connect(&authority).await?;
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
-    Ok(())
+impl ProxyEngine {
+    async fn tunnel_bytes(
+        &self,
+        client: hyper::upgrade::Upgraded,
+        authority: String,
+    ) -> Result<()> {
+        let settings = self.settings.get().await.unwrap_or_default();
+        let mut client = TokioIo::new(client);
+        let mut upstream: Box<dyn AsyncReadWrite> = if settings.upstream_proxy_enabled {
+            if settings.upstream_proxy_url.trim().is_empty() {
+                return Err(AppError::InvalidInput(
+                    "upstream proxy URL is required when upstream proxy is enabled".into(),
+                ));
+            }
+            connect_via_upstream_proxy(&settings.upstream_proxy_url, &authority).await?
+        } else {
+            Box::new(TcpStream::connect(&authority).await?)
+        };
+        tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+        Ok(())
+    }
 }

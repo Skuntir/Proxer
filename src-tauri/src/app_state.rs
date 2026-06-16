@@ -6,8 +6,8 @@ use std::{
 use tauri::AppHandle;
 
 use crate::{
-    extensions::ExtensionManager,
     events::EventBus,
+    extensions::ExtensionManager,
     intercept::InterceptManager,
     intruder::IntruderManager,
     logs::LogManager,
@@ -16,8 +16,8 @@ use crate::{
     rules::RuleSet,
     scanner::ScannerManager,
     settings::SettingsManager,
-    system_proxy,
     storage::{SqliteStore, StoreHandle},
+    system_proxy,
     tls::TlsManager,
 };
 
@@ -81,7 +81,6 @@ impl AppState {
             events.clone(),
             store.clone(),
             settings.clone(),
-            
             rules.clone(),
             tls.clone(),
             intercept.clone(),
@@ -134,7 +133,12 @@ impl AppState {
             .unwrap_or_else(|e| e.into_inner().clone())
     }
 
-    pub async fn set_project(&self, mode: ProjectMode, db_path: Option<PathBuf>, save_last: bool) -> crate::error::Result<()> {
+    pub async fn set_project(
+        &self,
+        mode: ProjectMode,
+        db_path: Option<PathBuf>,
+        save_last: bool,
+    ) -> crate::error::Result<()> {
         if self.proxy.status().await.running {
             let _ = self.proxy.stop().await;
         }
@@ -143,21 +147,31 @@ impl AppState {
 
         let next_path = match mode {
             ProjectMode::Temporary => temp_project_db_path(),
-            ProjectMode::Project => db_path.ok_or_else(|| crate::error::AppError::InvalidInput("missing project path".into()))?,
+            ProjectMode::Project => db_path.ok_or_else(|| {
+                crate::error::AppError::InvalidInput("missing project path".into())
+            })?,
         };
 
         if let Some(parent) = next_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
 
-        let next = Arc::new(SqliteStore::open_at(next_path.clone()).await.map_err(|e| crate::error::AppError::Other(e.to_string()))?);
+        let next = Arc::new(
+            SqliteStore::open_at(next_path.clone())
+                .await
+                .map_err(|e| crate::error::AppError::Other(e.to_string()))?,
+        );
         self.store.swap(next);
         let _ = self.extensions.ensure_seeded().await;
 
         if let Ok(mut w) = self.project.write() {
             *w = ProjectState {
                 mode: mode.clone(),
-                path: if matches!(mode, ProjectMode::Project) { Some(next_path.clone()) } else { None },
+                path: if matches!(mode, ProjectMode::Project) {
+                    Some(next_path.clone())
+                } else {
+                    None
+                },
             };
         }
 
@@ -179,6 +193,7 @@ impl AppState {
     }
 
     pub async fn open_project(&self, db_path: PathBuf) -> crate::error::Result<()> {
-        self.set_project(ProjectMode::Project, Some(db_path), true).await
+        self.set_project(ProjectMode::Project, Some(db_path), true)
+            .await
     }
 }

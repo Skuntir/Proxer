@@ -5,7 +5,10 @@ fn main() {
     println!("cargo:rustc-cfg=desktop");
     println!("cargo:rustc-check-cfg=cfg(dev)");
 
-    if std::env::var("PROFILE").map(|p| p == "debug").unwrap_or(false) {
+    if std::env::var("PROFILE")
+        .map(|p| p == "debug")
+        .unwrap_or(false)
+    {
         println!("cargo:rustc-cfg=dev");
     }
 

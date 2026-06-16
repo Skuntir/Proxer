@@ -66,7 +66,10 @@ impl ScannerManager {
         let scan_id = format!("scan-{}", uuid::Uuid::new_v4());
         let (stop_tx, mut stop_rx) = oneshot::channel();
         let store = self.store.get();
-        let passive_plus_enabled = store.extension_enabled("ext.passive-scanner").await.unwrap_or(false);
+        let passive_plus_enabled = store
+            .extension_enabled("ext.passive-scanner")
+            .await
+            .unwrap_or(false);
         let events = self.events.clone();
         let progress_done = Arc::new(Mutex::new(0));
         let progress_total = Arc::new(Mutex::new(0));
@@ -208,12 +211,33 @@ impl ScannerManager {
         }
     }
 
-    pub async fn findings_list(&self, severity: Option<String>, limit: u32, offset: u32) -> Result<Vec<UiVulnerability>> {
+    pub async fn findings_list(
+        &self,
+        severity: Option<String>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<UiVulnerability>> {
         let sev = severity.map(|s| normalize_severity(&s));
         let store = self.store.get();
-        let rows = store.vulnerabilities_list(sev.as_deref(), limit, offset).await?;
+        let rows = store
+            .vulnerabilities_list(sev.as_deref(), limit, offset)
+            .await?;
         let mut out = Vec::with_capacity(rows.len());
-        for (id, _ts_ms, severity, title, host, path, description, remediation, confidence, cvss, cwe, requests) in rows {
+        for (
+            id,
+            _ts_ms,
+            severity,
+            title,
+            host,
+            path,
+            description,
+            remediation,
+            confidence,
+            cvss,
+            cwe,
+            requests,
+        ) in rows
+        {
             out.push(UiVulnerability {
                 id,
                 severity,
@@ -249,18 +273,30 @@ fn header_get(headers: &[HeaderPair], name: &str) -> Option<String> {
         .map(|h| h.value.clone())
 }
 
-fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPair], passive_plus_enabled: bool) -> Vec<UiVulnerability> {
+fn passive_checks(
+    scheme: &str,
+    host: &str,
+    path: &str,
+    resp_headers: &[HeaderPair],
+    passive_plus_enabled: bool,
+) -> Vec<UiVulnerability> {
     let mut out = Vec::new();
 
-    if scheme.eq_ignore_ascii_case("https") && header_get(resp_headers, "strict-transport-security").is_none() {
+    if scheme.eq_ignore_ascii_case("https")
+        && header_get(resp_headers, "strict-transport-security").is_none()
+    {
         out.push(UiVulnerability {
             id: format!("vuln:hsts-missing:{host}:{path}"),
             severity: "Info".into(),
             title: "Missing Strict-Transport-Security".into(),
             host: host.to_string(),
             path: path.to_string(),
-            description: "The response over HTTPS does not include the Strict-Transport-Security header.".into(),
-            remediation: "Add the Strict-Transport-Security header to enforce HTTPS for subsequent requests.".into(),
+            description:
+                "The response over HTTPS does not include the Strict-Transport-Security header."
+                    .into(),
+            remediation:
+                "Add the Strict-Transport-Security header to enforce HTTPS for subsequent requests."
+                    .into(),
             confidence: "Firm".into(),
             cvss: None,
             cwe: Some("CWE-319".into()),
@@ -276,7 +312,8 @@ fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPa
             host: host.to_string(),
             path: path.to_string(),
             description: "The response does not include the X-Content-Type-Options header.".into(),
-            remediation: "Add X-Content-Type-Options: nosniff to prevent MIME-type sniffing.".into(),
+            remediation: "Add X-Content-Type-Options: nosniff to prevent MIME-type sniffing."
+                .into(),
             confidence: "Firm".into(),
             cvss: None,
             cwe: Some("CWE-16".into()),
@@ -309,7 +346,8 @@ fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPa
                 host: host.to_string(),
                 path: path.to_string(),
                 description: format!("The Server header appears to disclose a version: {server}"),
-                remediation: "Configure the server to remove or generalize the Server header.".into(),
+                remediation: "Configure the server to remove or generalize the Server header."
+                    .into(),
                 confidence: "Tentative".into(),
                 cvss: None,
                 cwe: Some("CWE-200".into()),
@@ -343,7 +381,8 @@ fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPa
                 host: host.to_string(),
                 path: path.to_string(),
                 description: "The response does not include a Referrer-Policy header.".into(),
-                remediation: "Add Referrer-Policy, for example strict-origin-when-cross-origin.".into(),
+                remediation: "Add Referrer-Policy, for example strict-origin-when-cross-origin."
+                    .into(),
                 confidence: "Firm".into(),
                 cvss: None,
                 cwe: Some("CWE-200".into()),
@@ -359,7 +398,8 @@ fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPa
                 host: host.to_string(),
                 path: path.to_string(),
                 description: "The response does not include a Permissions-Policy header.".into(),
-                remediation: "Add Permissions-Policy to limit browser features that pages may use.".into(),
+                remediation: "Add Permissions-Policy to limit browser features that pages may use."
+                    .into(),
                 confidence: "Tentative".into(),
                 cvss: None,
                 cwe: Some("CWE-16".into()),

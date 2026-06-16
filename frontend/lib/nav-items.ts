@@ -9,6 +9,8 @@ export const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'LayoutDashboard' },
   { id: 'history', label: 'HTTP History', icon: 'History' },
   { id: 'target', label: 'Sitemap', icon: 'Crosshair' },
+  { id: 'api-leaks', label: 'API Leaks', icon: 'KeyRound' },
+  { id: 'attack-surface', label: 'Attack Surface', icon: 'Network' },
   { id: 'intercept', label: 'Intercept', icon: 'ShieldAlert' },
   { id: 'proxy', label: 'Proxy', icon: 'Server' },
   { id: 'scanner', label: 'Scanner', icon: 'Radar' },

@@ -38,7 +38,9 @@ pub async fn build_sitemap(store: Arc<SqliteStore>, limit: u32) -> Result<Vec<Ui
             })
             .unwrap_or_else(|| "/".to_string());
 
-        let entry = hosts.entry(host.clone()).or_insert_with(|| HostNode::new(&host));
+        let entry = hosts
+            .entry(host.clone())
+            .or_insert_with(|| HostNode::new(&host));
         entry.insert_endpoint(
             &path,
             EndpointInfo {
@@ -84,11 +86,7 @@ impl HostNode {
         let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         if parts.is_empty() {
             self.endpoints
-                .push(endpoint_node(
-                    &format!("{}/", self.host),
-                    "/",
-                    info,
-                ));
+                .push(endpoint_node(&format!("{}/", self.host), "/", info));
             return;
         }
 
@@ -108,20 +106,16 @@ impl HostNode {
             cur = Some(next);
         }
         match cur {
-            Some(node) => node
-                .endpoints
-                .push(endpoint_node(
-                    &format!("{}:{}:{}", self.host, path, info.method),
-                    last,
-                    info,
-                )),
-            None => self
-                .endpoints
-                .push(endpoint_node(
-                    &format!("{}:{}:{}", self.host, path, info.method),
-                    last,
-                    info,
-                )),
+            Some(node) => node.endpoints.push(endpoint_node(
+                &format!("{}:{}:{}", self.host, path, info.method),
+                last,
+                info,
+            )),
+            None => self.endpoints.push(endpoint_node(
+                &format!("{}:{}:{}", self.host, path, info.method),
+                last,
+                info,
+            )),
         }
     }
 

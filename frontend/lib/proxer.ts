@@ -10,6 +10,10 @@ export async function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>('app_info')
 }
 
+export async function clientLog(level: 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG', source: string, message: string): Promise<void> {
+  return invoke<void>('client_log', { level, source, message })
+}
+
 export type HttpCookie = {
   name: string
   value: string
@@ -100,6 +104,9 @@ export type Settings = {
   autoSave: boolean
   maxHistoryItems: number
   maxResponseSizeMb: number
+  maxMemoryMb: number
+  scannerMemoryMb: number
+  scannerMaxRows: number
   hardwareAcceleration: boolean
   autoUpdate: boolean
   betaUpdates: boolean
@@ -107,7 +114,13 @@ export type Settings = {
   maxConcurrentConnections: number
   followRedirectsMax: number
   upstreamProxyEnabled: boolean
+  upstreamProxyUrl: string
   verifyCertificates: boolean
+  tlsFingerprintEnabled: boolean
+  tlsFingerprintProfile: string
+  tlsFingerprintOs: string
+  mcpEnabled: boolean
+  mcpPort: number
   showConnectTunnels: boolean
   scopeRegex: string
   systemProxyEnabled: boolean
@@ -119,6 +132,16 @@ export async function settingsGet(): Promise<Settings> {
 
 export async function settingsSet(patch: Partial<Settings>): Promise<Settings> {
   return invoke<Settings>('settings_set', { patch })
+}
+
+export type TlsFingerprintOptions = {
+  profiles: string[]
+  operatingSystems: string[]
+  reference: string
+}
+
+export async function tlsFingerprintOptions(): Promise<TlsFingerprintOptions> {
+  return invoke<TlsFingerprintOptions>('tls_fingerprint_options')
 }
 
 export async function projectOpenFolderDialog(): Promise<ProjectStatus | null> {
@@ -172,6 +195,82 @@ export type DashboardDetails = {
 
 export async function dashboardDetails(range?: string): Promise<DashboardDetails> {
   return invoke<DashboardDetails>('dashboard_details', { range })
+}
+
+export type ApiLeakFinding = {
+  id: string
+  tsMs: number
+  requestId: string
+  host: string
+  method: string
+  url: string
+  status?: number | null
+  category: string
+  name: string
+  severity: 'Critical' | 'High' | 'Medium' | 'Low' | 'Info' | string
+  location: string
+  evidence: string
+}
+
+export type ApiLeakSummary = {
+  scannedRequests: number
+  findings: ApiLeakFinding[]
+  generatedAtMs: number
+}
+
+export async function apiLeaksScan(limit = 5000): Promise<ApiLeakSummary> {
+  return invoke<ApiLeakSummary>('api_leaks_scan', { limit })
+}
+
+export type SurfaceDomain = {
+  name: string
+  hosts: number
+  requests: number
+  endpoints: number
+}
+
+export type SurfaceHost = {
+  host: string
+  domain: string
+  schemes: string[]
+  methods: string[]
+  requests: number
+  endpoints: number
+  success: number
+  redirects: number
+  clientErrors: number
+  serverErrors: number
+  technologies: string[]
+  ports: string[]
+  endpointPaths: string[]
+  apiPaths: string[]
+  interestingPaths: string[]
+  authPaths: string[]
+}
+
+export type SurfaceNode = {
+  id: string
+  label: string
+  kind: string
+  weight: number
+  lane: number
+}
+
+export type SurfaceEdge = {
+  from: string
+  to: string
+  weight: number
+}
+
+export type AttackSurface = {
+  domains: SurfaceDomain[]
+  hosts: SurfaceHost[]
+  nodes: SurfaceNode[]
+  edges: SurfaceEdge[]
+}
+
+export async function attackSurfaceGet(limit = 10000): Promise<AttackSurface> {
+  return invoke<AttackSurface>('attack_surface_get', { limit })
 }
 
 export async function configExport(): Promise<string> {
@@ -424,6 +523,18 @@ export async function projectOpen(path: string): Promise<ProjectStatus> {
 
 export async function interceptGetEnabled(): Promise<boolean> {
   return invoke<boolean>('intercept_get_enabled')
+}
+
+export type InterceptQueueItem = {
+  tsMs: number
+  interceptionId: string
+  requestId: string
+  raw: string
+  kind: 'http' | 'websocket' | string
+}
+
+export async function interceptQueue(): Promise<InterceptQueueItem[]> {
+  return invoke<InterceptQueueItem[]>('intercept_queue')
 }
 
 export async function interceptSetEnabled(enabled: boolean): Promise<boolean> {

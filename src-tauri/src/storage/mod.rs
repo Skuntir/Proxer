@@ -12,7 +12,10 @@ use uuid::Uuid;
 
 use crate::{
     error::{AppError, Result},
-    http_types::{HeaderPair, HistoryEntry, HistoryEntrySummary, ProxyRequest, ProxyResponse, StoredRequest, StoredResponse},
+    http_types::{
+        HeaderPair, HistoryEntry, HistoryEntrySummary, ProxyRequest, ProxyResponse, StoredRequest,
+        StoredResponse,
+    },
 };
 
 pub struct SqliteStore {
@@ -21,7 +24,6 @@ pub struct SqliteStore {
 
 impl SqliteStore {
     pub async fn open_at(db_path: PathBuf) -> tauri::Result<Self> {
-
         if let Some(parent) = db_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
@@ -36,7 +38,10 @@ impl SqliteStore {
             .map_err(|e| tauri::Error::Anyhow(anyhow::anyhow!(e)))?;
 
         let store = Self { pool };
-        store.init().await.map_err(|e| tauri::Error::Anyhow(anyhow::anyhow!(e)))?;
+        store
+            .init()
+            .await
+            .map_err(|e| tauri::Error::Anyhow(anyhow::anyhow!(e)))?;
         Ok(store)
     }
 
@@ -181,7 +186,12 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn insert(&self, req: &ProxyRequest, resp: Option<&ProxyResponse>, error: Option<&str>) -> Result<()> {
+    pub async fn insert(
+        &self,
+        req: &ProxyRequest,
+        resp: Option<&ProxyResponse>,
+        error: Option<&str>,
+    ) -> Result<()> {
         let req_headers = serde_json::to_string(&req.headers).unwrap_or_else(|_| "[]".into());
 
         let (resp_status, resp_headers, resp_body, elapsed_ms) = match resp {
@@ -351,7 +361,9 @@ impl SqliteStore {
     }
 
     pub async fn traffic_clear(&self) -> Result<()> {
-        sqlx::query("DELETE FROM traffic").execute(&self.pool).await?;
+        sqlx::query("DELETE FROM traffic")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -412,7 +424,14 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn logs_insert(&self, id: &str, ts_ms: i64, level: &str, source: &str, message: &str) -> Result<()> {
+    pub async fn logs_insert(
+        &self,
+        id: &str,
+        ts_ms: i64,
+        level: &str,
+        source: &str,
+        message: &str,
+    ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO logs (id, ts_ms, level, source, message)
@@ -434,7 +453,12 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn logs_list(&self, level: Option<&str>, limit: u32, offset: u32) -> Result<Vec<(String, i64, String, String, String)>> {
+    pub async fn logs_list(
+        &self,
+        level: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<(String, i64, String, String, String)>> {
         let limit = limit.clamp(1, 2000);
         let rows = match level {
             Some(level) => {
@@ -528,7 +552,22 @@ impl SqliteStore {
         severity: Option<&str>,
         limit: u32,
         offset: u32,
-    ) -> Result<Vec<(String, i64, String, String, String, String, String, String, String, Option<String>, Option<String>, i64)>> {
+    ) -> Result<
+        Vec<(
+            String,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+        )>,
+    > {
         let limit = limit.clamp(1, 2000);
         let rows = match severity {
             Some(sev) => {
@@ -589,7 +628,14 @@ impl SqliteStore {
         Ok(out)
     }
 
-    pub async fn intruder_attack_insert(&self, id: &str, started_ms: i64, status: &str, template_raw: &str, config_json: &str) -> Result<()> {
+    pub async fn intruder_attack_insert(
+        &self,
+        id: &str,
+        started_ms: i64,
+        status: &str,
+        template_raw: &str,
+        config_json: &str,
+    ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO intruder_attacks (id, started_ms, status, template_raw, config_json)
@@ -663,7 +709,19 @@ impl SqliteStore {
         attack_id: &str,
         limit: u32,
         offset: u32,
-    ) -> Result<Vec<(String, i64, i64, Option<i64>, Option<i64>, Option<i64>, Option<String>, String, Option<String>)>> {
+    ) -> Result<
+        Vec<(
+            String,
+            i64,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            String,
+            Option<String>,
+        )>,
+    > {
         let limit = limit.clamp(1, 5000);
         let rows = sqlx::query(
             r#"
@@ -697,7 +755,10 @@ impl SqliteStore {
         Ok(out)
     }
 
-    pub async fn extensions_seed_if_empty(&self, items: &[(String, String, String, String, f64, String, String)]) -> Result<()> {
+    pub async fn extensions_seed_if_empty(
+        &self,
+        items: &[(String, String, String, String, f64, String, String)],
+    ) -> Result<()> {
         let count = sqlx::query("SELECT count(1) as c FROM extensions;")
             .fetch_one(&self.pool)
             .await?
@@ -728,7 +789,23 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn extensions_list(&self, installed: Option<bool>) -> Result<Vec<(String, String, String, String, String, bool, bool, f64, String, String)>> {
+    pub async fn extensions_list(
+        &self,
+        installed: Option<bool>,
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            bool,
+            bool,
+            f64,
+            String,
+            String,
+        )>,
+    > {
         let rows = match installed {
             Some(true) => sqlx::query(
                 r#"
@@ -847,10 +924,19 @@ impl SqliteStore {
         let total_resp_bytes = row.get::<Option<i64>, _>("total_resp_bytes").unwrap_or(0);
         let avg_elapsed_ms = row.get::<Option<f64>, _>("avg_elapsed_ms");
         let unique_hosts = row.get::<i64, _>("unique_hosts");
-        Ok((total_requests, total_req_bytes, avg_elapsed_ms, unique_hosts, total_resp_bytes))
+        Ok((
+            total_requests,
+            total_req_bytes,
+            avg_elapsed_ms,
+            unique_hosts,
+            total_resp_bytes,
+        ))
     }
 
-    pub async fn traffic_sitemap_rows(&self, limit: u32) -> Result<Vec<(String, String, String, i64, String, i64, Option<i64>)>> {
+    pub async fn traffic_sitemap_rows(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<(String, String, String, i64, String, i64, Option<i64>)>> {
         let limit = limit.clamp(1, 5000);
         let rows = sqlx::query(
             r#"
@@ -952,7 +1038,12 @@ impl SqliteStore {
         Ok(out)
     }
 
-    pub async fn traffic_activity_buckets(&self, since_ms: i64, bucket_ms: i64, limit: u32) -> Result<Vec<(i64, i64)>> {
+    pub async fn traffic_activity_buckets(
+        &self,
+        since_ms: i64,
+        bucket_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<(i64, i64)>> {
         let bucket_ms = bucket_ms.max(1);
         let limit = limit.clamp(1, 240);
         let rows = sqlx::query(
@@ -1001,7 +1092,18 @@ impl SqliteStore {
         &self,
         limit: u32,
         offset: u32,
-    ) -> Result<Vec<(String, i64, String, String, String, Option<i64>, Option<String>, Option<String>)>> {
+    ) -> Result<
+        Vec<(
+            String,
+            i64,
+            String,
+            String,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        )>,
+    > {
         let limit = limit.clamp(1, 10_000);
         let rows = sqlx::query(
             r#"
@@ -1025,6 +1127,103 @@ impl SqliteStore {
                 r.get::<i64, _>("started_ms"),
                 r.get::<String, _>("scheme"),
                 r.get::<String, _>("host"),
+                r.get::<String, _>("url"),
+                r.get::<Option<i64>, _>("resp_status"),
+                r.get::<Option<String>, _>("req_headers"),
+                r.get::<Option<String>, _>("resp_headers"),
+            ));
+        }
+        Ok(out)
+    }
+
+    pub async fn traffic_leak_scan_rows(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<
+        Vec<(
+            String,
+            i64,
+            String,
+            String,
+            String,
+            Option<i64>,
+            String,
+            Vec<u8>,
+            Option<String>,
+            Option<Vec<u8>>,
+        )>,
+    > {
+        let limit = limit.clamp(1, 10_000);
+        let rows = sqlx::query(
+            r#"
+            SELECT id, started_ms, method, host, url, resp_status,
+                   req_headers, req_body, resp_headers, resp_body
+            FROM traffic
+            WHERE method != 'CONNECT'
+            ORDER BY started_ms DESC
+            LIMIT ?1 OFFSET ?2
+            "#,
+        )
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push((
+                r.get::<String, _>("id"),
+                r.get::<i64, _>("started_ms"),
+                r.get::<String, _>("method"),
+                r.get::<String, _>("host"),
+                r.get::<String, _>("url"),
+                r.get::<Option<i64>, _>("resp_status"),
+                r.get::<String, _>("req_headers"),
+                r.get::<Vec<u8>, _>("req_body"),
+                r.get::<Option<String>, _>("resp_headers"),
+                r.try_get::<Option<Vec<u8>>, _>("resp_body").ok().flatten(),
+            ));
+        }
+        Ok(out)
+    }
+
+    pub async fn traffic_attack_surface_rows(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        )>,
+    > {
+        let limit = limit.clamp(1, 10_000);
+        let rows = sqlx::query(
+            r#"
+            SELECT scheme, host, method, url, resp_status, req_headers, resp_headers
+            FROM traffic
+            WHERE method != 'CONNECT'
+            ORDER BY started_ms DESC
+            LIMIT ?1 OFFSET ?2
+            "#,
+        )
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push((
+                r.get::<String, _>("scheme"),
+                r.get::<String, _>("host"),
+                r.get::<String, _>("method"),
                 r.get::<String, _>("url"),
                 r.get::<Option<i64>, _>("resp_status"),
                 r.get::<Option<String>, _>("req_headers"),

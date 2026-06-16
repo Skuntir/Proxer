@@ -2,13 +2,27 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Image from 'next/image'
+import {
+  Background,
+  BaseEdge,
+  Controls,
+  Handle,
+  MiniMap,
+  Position,
+  ReactFlow,
+  ViewportPortal,
+  type Edge as FlowEdge,
+  type EdgeProps,
+  type Node as FlowNode,
+  type NodeProps,
+} from '@xyflow/react'
 import { 
   ShieldAlert, Crosshair, FileText, Activity, Zap, Lock, 
-  ChevronRight, ChevronDown, Folder, FileCode, Globe, Play, Pause, Plus, Trash2, Download,
+  ChevronRight, ChevronLeft, ChevronDown, Folder, FileCode, Globe, Play, Pause, Plus, Trash2, Download,
   AlertTriangle, Search, Filter, RefreshCw, Send, Copy,
   ArrowRightLeft, Star, Package, RotateCcw,
   Upload, Clipboard, X, ArrowUp, Edit3,
-  HardDrive, Cpu, MemoryStick, Sparkles
+  HardDrive, Cpu, MemoryStick, Sparkles, KeyRound, Network
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -29,6 +43,8 @@ import { cn } from '@/lib/utils'
 import { uiInfo, uiPrompt, uiToastError, uiToastSuccess, uiTwoField } from '@/lib/overlays'
 import {
   appInfo,
+  apiLeaksScan,
+  attackSurfaceGet,
   configExport,
   configImport,
   dashboardStats,
@@ -41,6 +57,7 @@ import {
   formatDurationMs,
   interceptDrop,
   interceptForward,
+  interceptQueue,
   intruderStart,
   intruderStop,
   logsClear,
@@ -65,21 +82,27 @@ import {
   tlsExportCaToDownloads,
   tlsGenerateCa,
   tlsGetMitmEnabled,
+  tlsFingerprintOptions,
   tlsImportCaPem,
   tlsSetMitmEnabled,
   type BackendEvent,
   type AppInfo,
+  type ApiLeakFinding,
+  type ApiLeakSummary,
+  type AttackSurface,
   type DashboardDetails,
   type DashboardStats,
   type Extension,
   type LogEntry,
   type HttpRequest,
+  type InterceptQueueItem,
   type IntruderResult,
   type RepeaterSendResult,
   type RuleSpec,
   type ScanStatus,
   type Settings,
   type SitemapNode,
+  type TlsFingerprintOptions,
   type Vulnerability,
 } from '@/lib/proxer'
 
@@ -976,6 +999,1152 @@ export function TargetView() {
   )
 }
 
+export function ApiLeaksView() {
+  const [summary, setSummary] = useState<ApiLeakSummary | null>(null)
+  const [query, setQuery] = useState('')
+  const [severity, setSeverity] = useState('all')
+  const [loading, setLoading] = useState(false)
+
+  const reload = async () => {
+    setLoading(true)
+    try {
+      setSummary(await apiLeaksScan(5000))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    reload().catch(() => {})
+  }, [])
+
+  const findings = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return (summary?.findings ?? []).filter((f) => {
+      if (severity !== 'all' && f.severity !== severity) return false
+      if (!q) return true
+      return [f.host, f.url, f.name, f.category, f.location, f.evidence].some((v) => v.toLowerCase().includes(q))
+    })
+  }, [query, severity, summary])
+
+  const counts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const f of summary?.findings ?? []) map.set(f.severity, (map.get(f.severity) ?? 0) + 1)
+    return map
+  }, [summary])
+
+  const severityClass = (s: string) =>
+    s === 'Critical'
+      ? 'bg-destructive/10 text-destructive border-destructive/20'
+      : s === 'High'
+        ? 'bg-status-server-error/10 text-status-server-error border-status-server-error/20'
+        : s === 'Medium'
+          ? 'bg-status-client-error/10 text-status-client-error border-status-client-error/20'
+          : 'bg-muted text-muted-foreground'
+
+  return (
+    <div className="flex flex-col h-full bg-background">
+      <div className="p-5 border-b border-border flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">API Leaks</h1>
+          <p className="text-sm text-muted-foreground mt-1">Secrets, tokens, keys, PGP blocks, credentials, and high-entropy values found in captured traffic</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => reload().catch(() => {})} disabled={loading}>
+          <RefreshCw className={cn('w-4 h-4 mr-2', loading && 'animate-spin')} />
+          Rescan
+        </Button>
+      </div>
+
+      <div className="p-5 grid grid-cols-5 gap-3">
+        {['Critical', 'High', 'Medium', 'Low', 'Info'].map((s) => (
+          <Card key={s} className="p-3 bg-card border-border">
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground">{s}</div>
+            <div className="mt-1 text-2xl font-bold">{counts.get(s) ?? 0}</div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="px-5 pb-4 flex items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9" placeholder="Filter findings" />
+        </div>
+        <Select value={severity} onValueChange={setSeverity}>
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All severities</SelectItem>
+            {['Critical', 'High', 'Medium', 'Low', 'Info'].map((s) => (
+              <SelectItem key={s} value={s}>{s}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Badge variant="outline">{summary?.scannedRequests ?? 0} scanned</Badge>
+      </div>
+
+      <div className="flex-1 min-h-0 px-5 pb-5">
+        <div className="h-full overflow-auto rounded-md border border-border">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-card border-b border-border">
+              <tr className="text-left text-muted-foreground">
+                <th className="px-3 py-2 font-medium">Severity</th>
+                <th className="px-3 py-2 font-medium">Type</th>
+                <th className="px-3 py-2 font-medium">Host</th>
+                <th className="px-3 py-2 font-medium">Location</th>
+                <th className="px-3 py-2 font-medium">Evidence</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {findings.map((f) => (
+                <tr key={f.id} className="border-b border-border/60 hover:bg-muted/30">
+                  <td className="px-3 py-2"><Badge variant="outline" className={severityClass(f.severity)}>{f.severity}</Badge></td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-foreground">{f.name}</div>
+                    <div className="text-muted-foreground">{f.category}</div>
+                  </td>
+                  <td className="px-3 py-2 max-w-64">
+                    <button className="font-mono text-left truncate max-w-full text-primary" onClick={() => appNavigate('history', { selectHistoryId: f.requestId })}>
+                      {f.host}
+                    </button>
+                    <div className="font-mono text-[10px] text-muted-foreground truncate">{f.method} {f.url}</div>
+                  </td>
+                  <td className="px-3 py-2">{f.location}</td>
+                  <td className="px-3 py-2 font-mono max-w-80 truncate">{f.evidence}</td>
+                  <td className="px-3 py-2 font-mono">{f.status ?? '-'}</td>
+                </tr>
+              ))}
+              {findings.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-12 text-center text-muted-foreground">
+                    <KeyRound className="w-10 h-10 mx-auto mb-3 opacity-50" />
+                    No leaks matched the current filter
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type AttackFlowNodeData = {
+  id: string
+  label: string
+  kind: string
+  icon: string
+  subtitle?: string
+  facts?: string[]
+  hasChildren?: boolean
+  isCollapsed?: boolean
+  meta?: { title: string; items: string[]; total: number }
+  stats?: {
+    requests?: number
+    endpoints?: number
+    success?: number
+    redirects?: number
+    clientErrors?: number
+    serverErrors?: number
+    schemes?: string[]
+    methods?: string[]
+  }
+}
+
+const compactCount = (value: number | undefined) => {
+  const safe = value ?? 0
+  if (safe >= 1_000_000) return `${(safe / 1_000_000).toFixed(1)}m`
+  if (safe >= 1_000) return `${(safe / 1_000).toFixed(1)}k`
+  return String(safe)
+}
+
+const attackSurfaceNodeIcon = (kind: string) =>
+  kind === 'root' || kind === 'domain' || kind === 'host'
+    ? '◎'
+    : kind === 'category'
+      ? '▣'
+      : kind === 'summary'
+        ? '+'
+        : kind === 'port'
+          ? '◧'
+          : kind === 'leak'
+            ? '!'
+            : kind === 'tech'
+              ? '◆'
+              : '⌘'
+
+function AttackSurfaceFlowNode({ data, selected }: NodeProps<FlowNode<AttackFlowNodeData>>) {
+  const kind = data.kind
+  const meta = data.meta
+  const stats = data.stats
+  const statusBits = stats
+    ? [
+        ['2xx', stats.success ?? 0, 'text-status-success'],
+        ['3xx', stats.redirects ?? 0, 'text-status-redirect'],
+        ['4xx', stats.clientErrors ?? 0, 'text-status-client-error'],
+        ['5xx', stats.serverErrors ?? 0, 'text-status-server-error'],
+      ].filter(([, count]) => Number(count) > 0)
+    : []
+  return (
+    <div
+      title={data.label}
+      className={cn(
+        'relative min-w-0 rounded-md border px-2 py-1.5 text-xs shadow-md',
+        selected
+          ? 'border-primary bg-primary text-primary-foreground'
+          : kind === 'domain'
+            ? 'border-foreground bg-foreground text-background'
+            : kind === 'host'
+              ? 'border-border bg-card text-foreground'
+              : kind === 'category'
+                ? 'border-border bg-muted/60 text-foreground'
+                : kind === 'summary'
+                  ? 'border-dashed border-muted-foreground/35 bg-muted/25 text-muted-foreground'
+                  : kind === 'leak'
+                    ? 'border-destructive/55 bg-destructive/15 text-foreground'
+                    : kind === 'tech'
+                      ? 'border-dashed border-border bg-muted/30 text-foreground'
+                      : ['api', 'auth', 'interesting'].includes(kind)
+                        ? 'border-primary/30 bg-primary/10 text-foreground'
+                        : 'border-border bg-card text-foreground'
+      )}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!h-2 !w-2 !border-border !bg-foreground !opacity-70"
+        isConnectable={false}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-2 !w-2 !border-border !bg-foreground !opacity-70"
+        isConnectable={false}
+      />
+      <div className="flex items-start gap-2">
+        <span className={cn('shrink-0 text-[12px]', selected ? 'text-primary-foreground' : kind === 'domain' ? 'text-background/60' : 'text-muted-foreground')}>
+          {data.icon}
+        </span>
+        <div className="min-w-0 flex-1">
+          {meta ? (
+            <>
+              <div className={cn('break-words text-[11px] font-semibold', selected ? 'text-primary-foreground' : 'text-foreground')}>{meta.title}</div>
+              <div className="mt-0.5 space-y-0.5">
+                {meta.items.map((item) => (
+                  <div key={item} className={cn('break-words text-[10px] leading-3', selected ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={cn('text-[11px] font-semibold', kind === 'domain' || kind === 'host' ? 'truncate' : 'break-words')}>{data.label}</div>
+              {data.subtitle && (
+                <div className={cn('mt-0.5 break-words text-[10px] leading-3', selected ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
+                  {data.subtitle}
+                </div>
+              )}
+            </>
+          )}
+          {!!data.facts?.length && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {data.facts.slice(0, 4).map((fact) => (
+                <Badge key={fact} variant="secondary" className="h-4 max-w-full px-1 text-[9px]">
+                  <span className="truncate">{fact}</span>
+                </Badge>
+              ))}
+            </div>
+          )}
+          {stats && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              <Badge variant="outline" className="h-4 px-1 text-[9px]">{compactCount(stats.requests)} req</Badge>
+              <Badge variant="outline" className="h-4 px-1 text-[9px]">{compactCount(stats.endpoints)} paths</Badge>
+              {(stats.schemes ?? []).slice(0, 2).map((scheme) => (
+                <Badge key={scheme} variant="secondary" className="h-4 px-1 text-[9px]">{scheme}</Badge>
+              ))}
+              {statusBits.map(([label, count, cls]) => (
+                <Badge key={String(label)} variant="outline" className={cn('h-4 px-1 text-[9px]', cls as string)}>
+                  {label}:{count}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+        {data.hasChildren && (
+          <span
+            className={cn(
+              'ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]',
+              selected ? 'border-primary-foreground/30 text-primary-foreground/80' : 'border-border text-muted-foreground'
+            )}
+          >
+            {data.isCollapsed ? '+' : '-'}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const attackSurfaceNodeTypes = { attackSurface: AttackSurfaceFlowNode }
+
+function AttackSurfaceConnectorEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  data,
+}: EdgeProps<FlowEdge<{ relation?: string; weight?: number }>>) {
+  const midX = sourceX + Math.max(48, (targetX - sourceX) / 2)
+  const edgePath = `M ${sourceX} ${sourceY} H ${midX} V ${targetY} H ${targetX}`
+  const relation = data?.relation
+  const edgeOpacity = relation === 'leaks' ? 0.78 : relation === 'inventory' || relation === 'serves' ? 0.68 : 0.58
+  const edgeWidth = relation === 'leaks' ? 1.8 : relation === 'inventory' || relation === 'serves' ? 1.5 : 1.25
+
+  return (
+    <>
+      <BaseEdge
+        id={`${id}-halo`}
+        path={edgePath}
+        interactionWidth={22}
+        style={{
+          stroke: 'hsl(var(--background))',
+          strokeOpacity: 0.72,
+          strokeWidth: edgeWidth + 3,
+        }}
+      />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        interactionWidth={22}
+        style={{
+          stroke: 'hsl(var(--foreground))',
+          strokeOpacity: edgeOpacity,
+          strokeWidth: edgeWidth,
+        }}
+      />
+    </>
+  )
+}
+
+const attackSurfaceEdgeTypes = { connector: AttackSurfaceConnectorEdge }
+
+export function AttackSurfaceView() {
+  const [surface, setSurface] = useState<AttackSurface | null>(null)
+  const [leaks, setLeaks] = useState<ApiLeakFinding[]>([])
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [domain, setDomain] = useState('all')
+  const [query, setQuery] = useState('')
+  const [nodeFilter, setNodeFilter] = useState('all')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({})
+  const [surfaceSidebarCollapsed, setSurfaceSidebarCollapsed] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const reloadTimerRef = useRef<number | null>(null)
+
+  const reload = async () => {
+    setLoading(true)
+    try {
+      const next = await attackSurfaceGet(2500)
+      setSurface(next)
+      setLoading(false)
+      apiLeaksScan(1500)
+        .then((leakSummary) => setLeaks(leakSummary.findings))
+        .catch(() => {})
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    reload().catch(() => {})
+    let unlisten: (() => void) | null = null
+    onBackendEvent((ev) => {
+      if (ev.type !== 'RequestCaptured' && ev.type !== 'ResponseReceived') return
+      if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current)
+      reloadTimerRef.current = window.setTimeout(() => {
+        reloadTimerRef.current = null
+        reload().catch(() => {})
+      }, 900)
+    }).then((u) => (unlisten = u))
+    return () => {
+      unlisten?.()
+      if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current)
+    }
+  }, [])
+
+  const canvas = useMemo(() => {
+    const hosts = surface?.hosts ?? []
+    const originalNodes = surface?.nodes ?? []
+    const originalEdges = surface?.edges ?? []
+    const sourceNodes = originalNodes.filter((node) => node.kind === 'domain' || node.kind === 'host')
+    const sourceNodeIds = new Set(sourceNodes.map((node) => node.id))
+    const sourceEdges = originalEdges.filter((edge) => sourceNodeIds.has(edge.from) && sourceNodeIds.has(edge.to))
+    const hostByName = new Map(hosts.map((h) => [h.host, h]))
+    const domainByName = new Map((surface?.domains ?? []).map((d) => [d.name, d]))
+    const groupedNodeMeta = new Map<string, { title: string; items: string[]; total: number }>()
+    const endpointLeakTotals = new Map<string, number>()
+    const endpointId = (host: string, path: string) => `endpoint:${host}:${path}`
+    const leakGroupId = (host: string, path: string, severity: string, name: string) => `leak:${host}:${path}:${severity}:${name}`
+    const categoryId = (host: string, category: string) => `category:${category}:${host}`
+    const leakPath = (leak: ApiLeakFinding) => {
+      try {
+        const parsed = new URL(leak.url)
+        return parsed.pathname || '/'
+      } catch {
+        return leak.url.startsWith('/') ? leak.url : '/'
+      }
+    }
+    const visualLimit = {
+      ports: 32,
+      tech: 32,
+      endpoints: 48,
+      leaksPerEndpoint: 10,
+    }
+    const splitVisible = <T,>(items: T[], limit: number) => ({
+      shown: items.slice(0, limit),
+      hidden: Math.max(0, items.length - limit),
+    })
+    const addNode = (id: string, label: string, kind: string, lane: number, weight = 1) => {
+      sourceNodes.push({
+        id,
+        label,
+        kind,
+        weight,
+        lane,
+      })
+    }
+    const addEdge = (from: string, to: string, weight = 1) => {
+      sourceEdges.push({
+        from,
+        to,
+        weight,
+      })
+    }
+    const addCategory = (host: AttackSurface['hosts'][number], category: string, label: string, lane: number, total: number) => {
+      if (!total) return null
+      const id = categoryId(host.host, category)
+      addNode(id, `${label} (${total})`, 'category', lane, total)
+      groupedNodeMeta.set(id, {
+        title: label,
+        items: [
+          `${total} ${total === 1 ? 'item' : 'items'}`,
+          `${compactCount(host.requests)} captured requests`,
+          host.methods.length ? `Methods: ${host.methods.slice(0, 4).join(', ')}` : '',
+        ].filter(Boolean),
+        total,
+      })
+      addEdge(`host:${host.host}`, id, total)
+      return id
+    }
+    const addSummary = (parentId: string | null, id: string, label: string, lane: number, count: number) => {
+      addNode(id, label, 'summary', lane, count)
+      groupedNodeMeta.set(id, { title: 'More', items: [label], total: count })
+      if (parentId) addEdge(parentId, id, count)
+    }
+    for (const host of hosts) {
+      const ports = host.ports.map((item) => item.trim()).filter(Boolean)
+      const portsCategoryId = addCategory(host, 'ports', 'Ports', 3, ports.length)
+      const visiblePorts = splitVisible(ports, visualLimit.ports)
+      for (const port of visiblePorts.shown) {
+        const id = `port:${host.host}:${port}`
+        addNode(id, port, 'port', 4)
+        if (portsCategoryId) addEdge(portsCategoryId, id)
+      }
+      if (portsCategoryId && visiblePorts.hidden) {
+        addSummary(portsCategoryId, `summary:ports:${host.host}`, `+${visiblePorts.hidden} more ports`, 4, visiblePorts.hidden)
+      }
+
+      const technologies = host.technologies.map((item) => item.trim()).filter(Boolean)
+      const techCategoryId = addCategory(host, 'tech', 'Technologies', 3, technologies.length)
+      const visibleTech = splitVisible(technologies, visualLimit.tech)
+      for (const tech of visibleTech.shown) {
+        const id = `tech:${host.host}:${tech}`
+        addNode(id, tech, 'tech', 4)
+        if (techCategoryId) addEdge(techCategoryId, id)
+      }
+      if (techCategoryId && visibleTech.hidden) {
+        addSummary(techCategoryId, `summary:tech:${host.host}`, `+${visibleTech.hidden} more technologies`, 4, visibleTech.hidden)
+      }
+
+      const leakCounts = new Map<string, { path: string; severity: string; name: string; count: number }>()
+      for (const leak of leaks.filter((item) => item.host === host.host)) {
+        const path = leakPath(leak)
+        const key = `${path}\u0000${leak.severity}\u0000${leak.name}`
+        const current = leakCounts.get(key) ?? { path, severity: leak.severity, name: leak.name, count: 0 }
+        current.count += 1
+        leakCounts.set(key, current)
+      }
+      const allEndpointPaths = new Set([
+        ...host.apiPaths,
+        ...host.authPaths,
+        ...host.interestingPaths,
+        ...host.endpointPaths,
+        ...[...leakCounts.values()].map((leak) => leak.path),
+      ].filter(Boolean))
+      const endpointsCategoryId = addCategory(host, 'endpoints', 'Endpoints', 3, allEndpointPaths.size)
+      const orderedEndpointPaths = [...allEndpointPaths].sort((a, b) => {
+        const score = (path: string) =>
+          (host.apiPaths.includes(path) ? 0 : 10)
+          + (host.authPaths.includes(path) ? 0 : 10)
+          + (host.interestingPaths.includes(path) ? 0 : 10)
+          - [...leakCounts.values()].filter((leak) => leak.path === path).reduce((sum, leak) => sum + leak.count, 0)
+        return score(a) - score(b) || a.localeCompare(b)
+      })
+      const visibleEndpoints = splitVisible(orderedEndpointPaths, visualLimit.endpoints)
+      for (const path of visibleEndpoints.shown) {
+        const kind = host.apiPaths.includes(path)
+          ? 'api'
+          : host.authPaths.includes(path)
+            ? 'auth'
+            : host.interestingPaths.includes(path)
+              ? 'interesting'
+              : 'endpoint'
+        const id = endpointId(host.host, path)
+        addNode(id, path, kind, 4)
+        if (endpointsCategoryId) addEdge(endpointsCategoryId, id)
+      }
+      if (endpointsCategoryId && visibleEndpoints.hidden) {
+        addSummary(endpointsCategoryId, `summary:endpoints:${host.host}`, `+${visibleEndpoints.hidden} more endpoints`, 4, visibleEndpoints.hidden)
+      }
+      const visibleEndpointSet = new Set(visibleEndpoints.shown)
+      const leaksByEndpoint = new Map<string, { path: string; severity: string; name: string; count: number }[]>()
+      for (const leak of [...leakCounts.values()].filter((item) => visibleEndpointSet.has(item.path))) {
+        const next = leaksByEndpoint.get(leak.path) ?? []
+        next.push(leak)
+        leaksByEndpoint.set(leak.path, next)
+      }
+      for (const [path, endpointLeaks] of leaksByEndpoint.entries()) {
+        const orderedLeaks = endpointLeaks.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+        const visibleLeaks = splitVisible(orderedLeaks, visualLimit.leaksPerEndpoint)
+        for (const leak of visibleLeaks.shown) {
+          const id = leakGroupId(host.host, leak.path, leak.severity, leak.name)
+          addNode(id, `${leak.name} (${leak.count}x)`, 'leak', 5, leak.count)
+          groupedNodeMeta.set(id, { title: leak.severity, items: [leak.name, `${leak.count} occurrences`], total: leak.count })
+          const parentEndpointId = endpointId(host.host, leak.path)
+          endpointLeakTotals.set(parentEndpointId, (endpointLeakTotals.get(parentEndpointId) ?? 0) + leak.count)
+          addEdge(parentEndpointId, id, leak.count)
+        }
+        if (visibleLeaks.hidden) {
+          const parentEndpointId = endpointId(host.host, path)
+          endpointLeakTotals.set(parentEndpointId, (endpointLeakTotals.get(parentEndpointId) ?? 0) + visibleLeaks.hidden)
+          addSummary(parentEndpointId, `summary:leaks:${host.host}:${path}`, `+${visibleLeaks.hidden} more leak types`, 5, visibleLeaks.hidden)
+        }
+      }
+    }
+    const selectedDomainHostNames = new Set(hosts.filter((h) => domain === 'all' || h.domain === domain).map((h) => h.host))
+    const hostIds = new Set([...selectedDomainHostNames].map((h) => `host:${h}`))
+    const adjacency = new Map<string, string[]>()
+    const parentByChild = new Map<string, string[]>()
+    for (const edge of sourceEdges) {
+      const next = adjacency.get(edge.from) ?? []
+      next.push(edge.to)
+      adjacency.set(edge.from, next)
+      const parents = parentByChild.get(edge.to) ?? []
+      parents.push(edge.from)
+      parentByChild.set(edge.to, parents)
+    }
+    const collapsibleIds = new Set([...adjacency.keys()])
+
+    const descendantIds = (roots: Set<string>) => {
+      const out = new Set<string>()
+      const stack = [...roots]
+      while (stack.length) {
+        const id = stack.pop()
+        if (!id) continue
+        for (const child of adjacency.get(id) ?? []) {
+          if (out.has(child)) continue
+          out.add(child)
+          stack.push(child)
+        }
+      }
+      return out
+    }
+    const domainIds = new Set(
+      sourceNodes
+        .filter((node) => node.kind === 'domain' && (domain === 'all' || node.label === domain))
+        .map((node) => node.id)
+    )
+    const allowedDescendants = descendantIds(new Set([...domainIds, ...hostIds]))
+    const allowedIds = new Set<string>()
+    for (const node of sourceNodes) {
+      if (node.kind === 'domain' && (domain === 'all' || node.label === domain)) allowedIds.add(node.id)
+      if (node.kind === 'host' && selectedDomainHostNames.has(node.label)) allowedIds.add(node.id)
+      if (allowedDescendants.has(node.id)) {
+        allowedIds.add(node.id)
+      }
+    }
+    const hiddenByCollapse = descendantIds(collapsed)
+
+    const q = query.trim().toLowerCase()
+    const baseNodes = sourceNodes
+      .filter((node) => allowedIds.has(node.id))
+      .filter((node) => !hiddenByCollapse.has(node.id))
+      .filter((node) => {
+        if (!q) return true
+        const host = node.kind === 'host' ? hostByName.get(node.label) : null
+        return node.label.toLowerCase().includes(q)
+          || node.kind.toLowerCase().includes(q)
+          || host?.technologies.join(' ').toLowerCase().includes(q)
+          || host?.ports.join(' ').toLowerCase().includes(q)
+          || host?.endpointPaths.join(' ').toLowerCase().includes(q)
+          || host?.apiPaths.join(' ').toLowerCase().includes(q)
+          || host?.interestingPaths.join(' ').toLowerCase().includes(q)
+          || host?.authPaths.join(' ').toLowerCase().includes(q)
+      })
+
+    const contextIds = new Set<string>()
+    const addAncestors = (id: string) => {
+      contextIds.add(id)
+      for (const parent of parentByChild.get(id) ?? []) {
+        if (contextIds.has(parent)) continue
+        addAncestors(parent)
+      }
+    }
+    if (nodeFilter !== 'all') {
+      for (const node of baseNodes) {
+        if (node.kind === nodeFilter) addAncestors(node.id)
+      }
+    }
+
+    const visibleNodes = baseNodes
+      .filter((node) => nodeFilter === 'all' || contextIds.has(node.id))
+      .sort((a, b) => a.lane - b.lane || b.weight - a.weight)
+
+    const visibleIds = new Set(visibleNodes.map((node) => node.id))
+    const nodeWidthFor = (node: AttackSurface['nodes'][number]) => {
+      if (node.kind === 'domain') return 320
+      if (node.kind === 'host') return 340
+      if (node.kind === 'category') return 260
+      if (node.kind === 'port' || node.kind === 'tech') return 250
+      if (node.kind === 'summary') return 260
+      if (node.kind === 'leak') return 300
+      return 380
+    }
+    const estimatedWrappedLines = (text: string, width: number) => Math.max(1, Math.ceil(text.length / Math.max(18, Math.floor(width / 7))))
+    const nodeHeightFor = (node: AttackSurface['nodes'][number]) => {
+      const meta = groupedNodeMeta.get(node.id)
+      const width = nodeWidthFor(node)
+      if (meta) return 50 + meta.items.reduce((sum, item) => sum + estimatedWrappedLines(item, width - 46) * 14, 0)
+      if (node.kind === 'domain') return 70
+      if (node.kind === 'host') return 88
+      if (node.kind === 'category') return 64
+      if (node.kind === 'port' || node.kind === 'tech') return 42
+      if (node.kind === 'leak') return 76
+      return Math.max(54, 34 + estimatedWrappedLines(node.label, width - 40) * 15)
+    }
+    const leftX = 120
+    const topY = 110
+    const siblingGap = 64
+    const domainGap = 180
+    const levelGap = 170
+    const kindRank: Record<string, number> = {
+      root: 0,
+      domain: 1,
+      host: 2,
+      category: 3,
+      port: 4,
+      tech: 5,
+      api: 6,
+      endpoint: 7,
+      auth: 8,
+      interesting: 9,
+      leak: 10,
+    }
+    const nodeById = new Map(visibleNodes.map((node) => [node.id, node]))
+    const visibleChildren = new Map<string, AttackSurface['nodes']>()
+    for (const edge of sourceEdges) {
+      if (!visibleIds.has(edge.from) || !visibleIds.has(edge.to)) continue
+      const child = nodeById.get(edge.to)
+      if (!child) continue
+      const children = visibleChildren.get(edge.from) ?? []
+      if (!children.some((existing) => existing.id === child.id)) {
+        children.push(child)
+      }
+      visibleChildren.set(edge.from, children)
+    }
+    for (const children of visibleChildren.values()) {
+      children.sort((a, b) => {
+        const rank = (kindRank[a.kind] ?? 99) - (kindRank[b.kind] ?? 99)
+        if (rank !== 0) return rank
+        return b.weight - a.weight || a.label.localeCompare(b.label)
+      })
+    }
+
+    const positionById = new Map<string, { x: number; y: number }>()
+    const domainNodes = visibleNodes.filter((node) => node.kind === 'domain')
+    let cursorY = topY
+    const measureCache = new Map<string, number>()
+    const measureSubtree = (node: AttackSurface['nodes'][number], stack = new Set<string>()): number => {
+      if (measureCache.has(node.id)) return measureCache.get(node.id) ?? nodeWidthFor(node)
+      if (stack.has(node.id)) return nodeHeightFor(node)
+      stack.add(node.id)
+      const children = visibleChildren.get(node.id) ?? []
+      const childHeight = children.reduce((sum, child, index) => sum + measureSubtree(child, new Set(stack)) + (index ? siblingGap : 0), 0)
+      const height = Math.max(nodeHeightFor(node), childHeight)
+      measureCache.set(node.id, height)
+      return height
+    }
+    const placeSubtree = (node: AttackSurface['nodes'][number], x: number, top: number, stack = new Set<string>()) => {
+      if (stack.has(node.id)) return
+      stack.add(node.id)
+      const subtreeHeight = measureSubtree(node)
+      const nodeHeight = nodeHeightFor(node)
+      positionById.set(node.id, {
+        x,
+        y: top + subtreeHeight / 2 - nodeHeight / 2,
+      })
+      const children = visibleChildren.get(node.id) ?? []
+      const childrenHeight = children.reduce((sum, child, index) => sum + measureSubtree(child) + (index ? siblingGap : 0), 0)
+      let childTop = top + Math.max(0, (subtreeHeight - childrenHeight) / 2)
+      for (const child of children) {
+        const childHeight = measureSubtree(child)
+        placeSubtree(child, x + nodeWidthFor(node) + levelGap, childTop, new Set(stack))
+        childTop += childHeight + siblingGap
+      }
+    }
+
+    for (const domainNode of domainNodes.sort((a, b) => b.weight - a.weight || a.label.localeCompare(b.label))) {
+      const height = measureSubtree(domainNode)
+      placeSubtree(domainNode, leftX, cursorY)
+      cursorY += height + domainGap
+    }
+
+    let orphanY = cursorY
+    for (const node of visibleNodes) {
+      if (positionById.has(node.id)) continue
+      positionById.set(node.id, { x: leftX, y: orphanY })
+      orphanY += nodeHeightFor(node) + levelGap
+    }
+
+    const positioned = visibleNodes.map((node) => {
+      const auto = positionById.get(node.id) ?? { x: 140, y: topY }
+      const manual = nodePositions[node.id]
+      return {
+        ...node,
+        x: manual?.x ?? auto.x,
+        y: manual?.y ?? auto.y,
+        width: nodeWidthFor(node),
+        height: nodeHeightFor(node),
+      }
+    })
+
+    const byId = new Map(positioned.map((node) => [node.id, node]))
+    const lines: { id: string; path: string; relation?: string }[] = []
+    const relationForKind = (kind: string) => {
+      if (kind === 'host') return 'host'
+      if (kind === 'category') return 'inventory'
+      if (kind === 'port') return 'exposes'
+      if (kind === 'tech') return 'uses'
+      if (['api', 'endpoint', 'auth', 'interesting'].includes(kind)) return 'serves'
+      if (kind === 'leak') return 'leaks'
+      return undefined
+    }
+    const addLine = (id: string, path: string, relation?: string) => {
+      lines.push({ id, path, relation })
+    }
+    for (const parent of positioned) {
+      const children = (visibleChildren.get(parent.id) ?? [])
+        .map((child) => byId.get(child.id))
+        .filter((child): child is NonNullable<typeof child> => Boolean(child))
+        .sort((a, b) => a.y - b.y)
+      if (!children.length) continue
+      const parentRightX = parent.x + parent.width
+      const parentCenterY = parent.y + parent.height / 2
+      const firstCenterY = children[0].y + children[0].height / 2
+      const lastCenterY = children[children.length - 1].y + children[children.length - 1].height / 2
+      const childLeftX = Math.min(...children.map((child) => child.x))
+      const busX = parentRightX + Math.max(36, (childLeftX - parentRightX) / 2)
+      const parentRelation = relationForKind(parent.kind)
+      addLine(`${parent.id}:drop`, `M ${parentRightX} ${parentCenterY} H ${busX}`, parentRelation)
+      addLine(`${parent.id}:bus`, `M ${busX} ${Math.min(firstCenterY, parentCenterY)} V ${Math.max(lastCenterY, parentCenterY)}`, parentRelation)
+      for (const child of children) {
+        const childCenterY = child.y + child.height / 2
+        addLine(`${parent.id}->${child.id}`, `M ${busX} ${childCenterY} H ${child.x}`, relationForKind(child.kind))
+      }
+    }
+
+    const width = Math.max(1900, ...positioned.map((node) => node.x + node.width + 160), 1900)
+    const height = Math.max(1000, ...positioned.map((node) => node.y + node.height + 120), 1000)
+    const flowNodes: FlowNode<AttackFlowNodeData>[] = positioned.map((node) => {
+      const host = node.kind === 'host' ? hostByName.get(node.label) : null
+      const domainInfo = node.kind === 'domain' ? domainByName.get(node.label) : null
+      const endpointLeakTotal = endpointLeakTotals.get(node.id) ?? 0
+      const isEndpoint = ['api', 'auth', 'interesting', 'endpoint'].includes(node.kind)
+      const endpointClass =
+        node.kind === 'api'
+          ? 'API surface'
+          : node.kind === 'auth'
+            ? 'Auth surface'
+            : node.kind === 'interesting'
+              ? 'Interesting surface'
+              : isEndpoint
+                ? 'Observed endpoint'
+                : undefined
+      return {
+        id: node.id,
+        type: 'attackSurface',
+        position: { x: node.x, y: node.y },
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+        draggable: true,
+        selectable: true,
+        style: { width: node.width },
+        data: {
+          id: node.id,
+          label: node.label,
+          kind: node.kind,
+          icon: attackSurfaceNodeIcon(node.kind),
+          subtitle: domainInfo
+            ? `${compactCount(domainInfo.hosts)} hosts · ${compactCount(domainInfo.requests)} requests · ${compactCount(domainInfo.endpoints)} endpoints`
+            : host
+              ? host.domain
+              : endpointClass,
+          facts: host
+            ? [
+                host.methods.length ? `Methods ${host.methods.slice(0, 4).join('/')}` : '',
+                host.ports.length ? `${host.ports.length} ports` : '',
+                host.technologies.length ? `${host.technologies.length} tech` : '',
+                host.apiPaths.length ? `${host.apiPaths.length} API` : '',
+              ].filter(Boolean)
+            : isEndpoint
+              ? [
+                  endpointLeakTotal ? `${compactCount(endpointLeakTotal)} leaks` : '',
+                  node.kind === 'auth' ? 'auth' : '',
+                  node.kind === 'api' ? 'api' : '',
+                ].filter(Boolean)
+              : undefined,
+          hasChildren: collapsibleIds.has(node.id),
+          isCollapsed: collapsed.has(node.id),
+          meta: groupedNodeMeta.get(node.id),
+          stats: host
+            ? {
+                requests: host.requests,
+                endpoints: host.endpoints,
+                success: host.success,
+                redirects: host.redirects,
+                clientErrors: host.clientErrors,
+                serverErrors: host.serverErrors,
+                schemes: host.schemes,
+                methods: host.methods,
+              }
+            : domainInfo
+              ? {
+                  requests: domainInfo.requests,
+                  endpoints: domainInfo.endpoints,
+                }
+            : undefined,
+        },
+      }
+    })
+    const relationFor = (_from: string, to: string) => {
+      const child = byId.get(to)
+      return child ? relationForKind(child.kind) : undefined
+    }
+    const flowEdges: FlowEdge[] = sourceEdges
+      .filter((edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to))
+      .map((edge, index) => ({
+        id: `${edge.from}->${edge.to}:${index}`,
+        source: edge.from,
+        target: edge.to,
+        type: 'connector',
+        animated: false,
+        data: {
+          relation: relationFor(edge.from, edge.to),
+          weight: edge.weight,
+        },
+        style: { stroke: 'hsl(var(--foreground))', strokeWidth: 1.25 },
+      }))
+    return { nodes: positioned, flowNodes, flowEdges, lines, width, height, collapsibleIds, groupedNodeMeta }
+  }, [collapsed, domain, leaks, nodeFilter, nodePositions, query, surface])
+
+  const selectedNode = canvas.nodes.find((node) => node.id === selectedNodeId) ?? null
+  const selectedHost = selectedNode?.kind === 'host' ? surface?.hosts.find((h) => h.host === selectedNode.label) : null
+  const selectedLeak = selectedNode?.kind === 'leak' ? leaks.find((l) => selectedNode.id === `leak:${l.id}` || selectedNode.id.includes(l.requestId)) : null
+
+  const toggleCollapse = (id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  return (
+    <div
+      className="relative grid h-full select-none overflow-hidden bg-background text-foreground"
+      style={{ gridTemplateColumns: surfaceSidebarCollapsed ? 'minmax(0, 1fr) 44px' : 'minmax(0, 1fr) 320px' }}
+    >
+      <div className="relative min-w-0 overflow-hidden">
+      <div className="absolute inset-0 border-t border-border" />
+
+      <div className="absolute left-4 top-3 z-30 flex items-center gap-3">
+        <Select value={domain} onValueChange={setDomain}>
+          <SelectTrigger className="h-8 w-44 rounded-full border-border bg-card/95 text-xs text-foreground">
+            <SelectValue placeholder="All domains" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All domains</SelectItem>
+            {(surface?.domains ?? []).map((d) => (
+              <SelectItem key={d.name} value={d.name}>{d.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="absolute right-4 top-3 z-30 flex items-center gap-2">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search..."
+            className="h-8 w-56 rounded-full border-border bg-card/95 pl-8 text-xs text-foreground"
+          />
+        </div>
+        <Button variant="outline" size="sm" className="h-8 rounded-full border-border bg-card/95 px-3" onClick={() => reload().catch(() => {})} disabled={loading}>
+          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+        </Button>
+      </div>
+
+      <div className="absolute inset-0">
+        <ReactFlow
+          nodes={canvas.flowNodes}
+          edges={[]}
+          nodeTypes={attackSurfaceNodeTypes}
+          edgeTypes={attackSurfaceEdgeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          minZoom={0.08}
+          maxZoom={1.8}
+          nodesDraggable
+          nodesConnectable={false}
+          elementsSelectable
+          proOptions={{ hideAttribution: true }}
+          defaultEdgeOptions={{ type: 'connector', style: { stroke: 'hsl(var(--foreground))', strokeWidth: 1.25 } }}
+          onNodesChange={(changes) => {
+            const positions: Record<string, { x: number; y: number }> = {}
+            for (const change of changes) {
+              if (change.type === 'position' && change.position) {
+                positions[change.id] = { x: change.position.x, y: change.position.y }
+              }
+            }
+            if (Object.keys(positions).length) {
+              setNodePositions((prev) => ({ ...prev, ...positions }))
+            }
+          }}
+          onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+          onNodeDoubleClick={(_, node) => {
+            if (canvas.collapsibleIds.has(node.id)) toggleCollapse(node.id)
+          }}
+          onNodeDragStop={(_, node) => {
+            setNodePositions((prev) => ({
+              ...prev,
+              [node.id]: { x: node.position.x, y: node.position.y },
+            }))
+          }}
+          className="bg-background"
+        >
+          <ViewportPortal>
+            <svg
+              className="pointer-events-none absolute left-0 top-0 overflow-visible"
+              width={canvas.width}
+              height={canvas.height}
+              viewBox={`0 0 ${canvas.width} ${canvas.height}`}
+              aria-hidden="true"
+              style={{ zIndex: 1 }}
+            >
+              {canvas.lines.map((line) => {
+                const strong = line.relation === 'leaks' || line.relation === 'serves' || line.relation === 'inventory'
+                return (
+                  <g key={line.id}>
+                    <path
+                      d={line.path}
+                      fill="none"
+                      stroke="hsl(var(--background))"
+                      strokeWidth={strong ? 5 : 4}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={0.82}
+                    />
+                    <path
+                      d={line.path}
+                      fill="none"
+                      stroke="hsl(var(--foreground))"
+                      strokeWidth={strong ? 2 : 1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={strong ? 0.82 : 0.68}
+                    />
+                  </g>
+                )
+              })}
+            </svg>
+          </ViewportPortal>
+          <Background gap={22} size={1} color="hsl(var(--muted-foreground) / 0.32)" />
+          <MiniMap
+            pannable
+            zoomable
+            nodeStrokeWidth={2}
+            className="!bg-card !border !border-border"
+            nodeColor={(node) => {
+              const data = node.data as AttackFlowNodeData | undefined
+              return data?.kind === 'domain'
+                ? 'hsl(var(--foreground))'
+                : data?.kind === 'leak'
+                  ? 'hsl(var(--destructive))'
+                  : data?.kind === 'category'
+                    ? 'hsl(var(--muted))'
+                    : 'hsl(var(--card))'
+            }}
+          />
+          <Controls className="!bg-card !border !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-foreground" />
+        </ReactFlow>
+      </div>
+
+      {canvas.nodes.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+          No attack surface nodes matched the current filter
+        </div>
+      )}
+      </div>
+
+      <aside className={cn(
+        'z-20 flex min-h-0 flex-col border-l border-border bg-card/95 text-xs transition-[width]',
+        surfaceSidebarCollapsed ? 'items-center overflow-hidden p-2' : 'gap-4 overflow-auto p-4'
+      )}>
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn('h-8 border-border bg-background', surfaceSidebarCollapsed ? 'w-8 rounded-full p-0' : 'w-full justify-between rounded-md px-2')}
+          onClick={() => setSurfaceSidebarCollapsed((prev) => !prev)}
+          title={surfaceSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {!surfaceSidebarCollapsed && <span className="text-xs">Panel</span>}
+          {surfaceSidebarCollapsed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </Button>
+        {!surfaceSidebarCollapsed && (
+          <>
+        <div>
+          <div className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Filter</div>
+          <div className="space-y-1">
+            {[
+              ['all', 'All Nodes'],
+              ['domain', 'Domains'],
+              ['host', 'Subdomains'],
+              ['category', 'Categories'],
+              ['summary', 'More Nodes'],
+              ['port', 'Ports'],
+              ['tech', 'Tech'],
+              ['api', 'API Endpoints'],
+              ['endpoint', 'Endpoints'],
+              ['leak', 'API Leaks'],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setNodeFilter(id)}
+                className={cn(
+                  'flex h-7 w-full items-center rounded-md px-2 text-left transition-colors',
+                  nodeFilter === id ? 'text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t border-border pt-4">
+          <div className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Node Types</div>
+          <div className="grid grid-cols-2 gap-2 text-xs text-foreground">
+            {[
+              ['◎', 'Root'],
+              ['◎', 'Domains'],
+              ['◎', 'Subdomains'],
+              ['▣', 'Categories'],
+              ['+', 'More Nodes'],
+              ['◧', 'Ports'],
+              ['⌘', 'Endpoints'],
+              ['◆', 'Tech'],
+              ['!', 'Leaks'],
+            ].map(([icon, label]) => (
+              <div key={label} className="flex items-center gap-2 rounded bg-muted/40 px-2 py-1.5">
+                <span className="w-4 text-muted-foreground">{icon}</span>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t border-border pt-4">
+        {selectedNode ? (
+          <>
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{selectedNode.kind}</div>
+          <div className="break-all font-mono text-sm font-semibold text-foreground">{selectedNode.label}</div>
+          {canvas.collapsibleIds.has(selectedNode.id) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 h-8 w-full rounded-md border-border bg-background text-xs"
+              onClick={() => toggleCollapse(selectedNode.id)}
+            >
+              {collapsed.has(selectedNode.id) ? 'Expand node' : 'Collapse node'}
+            </Button>
+          )}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="rounded-md bg-muted/50 p-2">
+              <div className="text-muted-foreground">Weight</div>
+              <div className="font-mono text-foreground">{selectedNode.weight}</div>
+            </div>
+            {selectedHost && (
+              <div className="rounded-md bg-muted/50 p-2">
+                <div className="text-muted-foreground">Endpoints</div>
+                <div className="font-mono text-foreground">{selectedHost.endpoints}</div>
+              </div>
+            )}
+          </div>
+          {selectedLeak && (
+            <div className="mt-3 space-y-2">
+              <Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-destructive">{selectedLeak.severity}</Badge>
+              <div className="rounded bg-muted/50 px-2 py-1 font-mono">{selectedLeak.evidence}</div>
+              <div className="break-all text-muted-foreground">{selectedLeak.url}</div>
+            </div>
+          )}
+          {selectedHost && (
+            <div className="mt-3 space-y-3">
+              <div>
+                <div className="mb-1 text-muted-foreground">Methods</div>
+                <div className="flex flex-wrap gap-1">{selectedHost.methods.map((m) => <Badge key={m} variant="outline">{m}</Badge>)}</div>
+              </div>
+              <div>
+                <div className="mb-1 text-muted-foreground">Ports</div>
+                <div className="flex flex-wrap gap-1">{selectedHost.ports.map((p) => <Badge key={p} variant="secondary">{p}</Badge>)}</div>
+              </div>
+              <div>
+                <div className="mb-1 text-muted-foreground">API Endpoints</div>
+                <div className="space-y-1">{(selectedHost.apiPaths.length ? selectedHost.apiPaths : selectedHost.endpointPaths).slice(0, 5).map((p) => <div key={p} className="truncate rounded bg-muted/50 px-2 py-1 font-mono">{p}</div>)}</div>
+              </div>
+            </div>
+          )}
+          </>
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-center text-muted-foreground">
+            Select a node to inspect its attack surface details.
+          </div>
+        )}
+        </div>
+          </>
+        )}
+      </aside>
+    </div>
+  )
+}
+
 export function ProxyView({
   interceptEnabled,
   onInterceptToggle,
@@ -987,21 +2156,24 @@ export function ProxyView({
   const [mitmEnabled, setMitmEnabled] = useState(false)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [settings, setSettingsState] = useState<Settings | null>(null)
+  const [fingerprintOptions, setFingerprintOptions] = useState<TlsFingerprintOptions | null>(null)
   const [rules, setRules] = useState<RuleSpec[]>([])
 
   const reload = async () => {
-    const [ps, me, ds, s, r] = await Promise.all([
+    const [ps, me, ds, s, r, fo] = await Promise.all([
       proxyStatus(),
       tlsGetMitmEnabled(),
       dashboardStats(),
       settingsGet(),
       rulesList(),
+      tlsFingerprintOptions(),
     ])
     setProxy(ps)
     setMitmEnabled(me)
     setStats(ds)
     setSettingsState(s)
     setRules(r)
+    setFingerprintOptions(fo)
   }
 
   useEffect(() => {
@@ -1279,6 +2451,55 @@ export function ProxyView({
                 Import CA
               </Button>
             </div>
+            <div className="pt-4 border-t border-border space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Custom TLS Fingerprint</p>
+                  <p className="text-xs text-muted-foreground">Uses primp browser impersonation for upstream HTTP(S)</p>
+                </div>
+                <Switch
+                  checked={Boolean(settings?.tlsFingerprintEnabled)}
+                  onCheckedChange={(enabled) => updateSettings({ tlsFingerprintEnabled: enabled })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Browser Profile</label>
+                  <Select
+                    value={settings?.tlsFingerprintProfile ?? 'chrome'}
+                    onValueChange={(v) => updateSettings({ tlsFingerprintProfile: v })}
+                  >
+                    <SelectTrigger className="mt-1.5 h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(fingerprintOptions?.profiles ?? ['chrome']).map((profile) => (
+                        <SelectItem key={profile} value={profile}>{profile}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Operating System</label>
+                  <Select
+                    value={settings?.tlsFingerprintOs ?? 'windows'}
+                    onValueChange={(v) => updateSettings({ tlsFingerprintOs: v })}
+                  >
+                    <SelectTrigger className="mt-1.5 h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(fingerprintOptions?.operatingSystems ?? ['windows']).map((os) => (
+                        <SelectItem key={os} value={os}>{os}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Reference: {fingerprintOptions?.reference ?? 'https://github.com/deedy5/primp'}
+              </p>
+            </div>
           </div>
         </Card>
 
@@ -1369,11 +2590,44 @@ export function ProxyView({
               <Switch
                 checked={Boolean(settings?.upstreamProxyEnabled)}
                 onCheckedChange={(enabled) => {
-                  settingsSet({ upstreamProxyEnabled: enabled })
-                    .then((s) => setSettingsState(s))
-                    .catch(() => {})
+                  updateSettings({ upstreamProxyEnabled: enabled })
                 }}
               />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Upstream Proxy URL</label>
+              <Input
+                value={settings?.upstreamProxyUrl ?? ''}
+                placeholder="http://127.0.0.1:8081 or socks5h://127.0.0.1:9050"
+                onChange={(e) => updateSettings({ upstreamProxyUrl: e.target.value })}
+                className="mt-1.5 h-9 font-mono text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">HTTP, HTTPS, SOCKS5, and SOCKS5H are supported for HTTP(S) requests.</p>
+            </div>
+            <div className="pt-3 border-t border-border space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">MCP Server</p>
+                  <p className="text-xs text-muted-foreground">JSON-RPC tools for agents on localhost</p>
+                </div>
+                <Switch
+                  checked={Boolean(settings?.mcpEnabled)}
+                  onCheckedChange={(enabled) => updateSettings({ mcpEnabled: enabled })}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">MCP Port</label>
+                <Input
+                  type="number"
+                  value={settings?.mcpPort ?? 8765}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (Number.isFinite(v)) updateSettings({ mcpPort: v })
+                  }}
+                  className="mt-1.5 h-9"
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">Restart Proxer after changing MCP server settings.</p>
+              </div>
             </div>
           </div>
         </Card>
@@ -1933,8 +3187,15 @@ administrator`
 }
 
 export function RepeaterView() {
-  const [response, setResponse] = useState<string | null>(null)
-  const [result, setResult] = useState<RepeaterSendResult | null>(null)
+  type RepeaterTab = {
+    id: string
+    title: string
+    rawRequest: string
+    response: string | null
+    result: RepeaterSendResult | null
+    sending: boolean
+  }
+
   const [sending, setSending] = useState(false)
   const exampleRawRequest = `POST https://api.example.com/api/users/1 HTTP/1.1
 Host: api.example.com
@@ -1946,54 +3207,181 @@ Accept: application/json
   "name": "Updated Name",
   "email": "updated@example.com"
 }`
-  const [rawRequest, setRawRequest] = useState(exampleRawRequest)
+  const storageKey = 'skuntir:repeaterTabs'
+  const activeStorageKey = 'skuntir:repeaterActiveTab'
+  const tabsRef = useRef(0)
+  const tabsStateRef = useRef<RepeaterTab[]>([])
+  const activeTabIdRef = useRef('initial')
+  const [tabs, setTabs] = useState<RepeaterTab[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(storageKey) || '[]') as RepeaterTab[]
+      if (Array.isArray(stored) && stored.length > 0) {
+        const restored = stored.slice(0, 50).map((tab, index) => ({
+          id: tab.id || `restored-${index + 1}`,
+          title: tab.title || `Request ${index + 1}`,
+          rawRequest: tab.rawRequest || '',
+          response: tab.response ?? null,
+          result: tab.result ?? null,
+          sending: false,
+        }))
+        tabsRef.current = restored.length
+        tabsStateRef.current = restored
+        activeTabIdRef.current = localStorage.getItem(activeStorageKey) || restored[0].id
+        return restored
+      }
+    } catch {
+      localStorage.removeItem(storageKey)
+      localStorage.removeItem(activeStorageKey)
+    }
+
+    tabsRef.current = 1
+    const initial = [{
+      id: 'initial',
+      title: 'Request 1',
+      rawRequest: exampleRawRequest,
+      response: null,
+      result: null,
+      sending: false,
+    }]
+    tabsStateRef.current = initial
+    return initial
+  })
+  const [activeTabId, setActiveTabId] = useState(activeTabIdRef.current)
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
+
+  const activateTab = (id: string) => {
+    activeTabIdRef.current = id
+    setActiveTabId(id)
+  }
 
   useEffect(() => {
-    const next = localStorage.getItem('skuntir:repeaterRaw')
-    if (next) {
-      setRawRequest(next)
-      localStorage.removeItem('skuntir:repeaterRaw')
-      setResponse(null)
-      setResult(null)
+    tabsStateRef.current = tabs
+    localStorage.setItem(storageKey, JSON.stringify(tabs.map((tab) => ({ ...tab, sending: false }))))
+  }, [tabs])
+
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId
+    localStorage.setItem(activeStorageKey, activeTabId)
+  }, [activeTabId])
+
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.some((tab) => tab.id === activeTabId)) {
+      activateTab(tabs[0].id)
     }
-    settingsGet()
-      .then((s) => {
-        if (s.showExamples === false) {
-          setRawRequest((prev) => (prev === exampleRawRequest ? '' : prev))
-        } else {
-          setRawRequest((prev) => (prev.trim() === '' ? exampleRawRequest : prev))
-        }
-      })
-      .catch(() => {})
-  }, [])
+  }, [tabs, activeTabId])
+
+  const addTab = (rawRequest = exampleRawRequest) => {
+    tabsRef.current += 1
+    const tab: RepeaterTab = {
+      id: `${Date.now()}-${tabsRef.current}`,
+      title: `Request ${tabsRef.current}`,
+      rawRequest,
+      response: null,
+      result: null,
+      sending: false,
+    }
+    setTabs((prev) => [...prev, tab])
+    activateTab(tab.id)
+  }
+
+  const closeTab = (id = activeTabIdRef.current) => {
+    setTabs((prev) => {
+      if (prev.length <= 1) return prev
+      const index = prev.findIndex((tab) => tab.id === id)
+      const next = prev.filter((tab) => tab.id !== id)
+      if (id === activeTabIdRef.current) {
+        activateTab(next[Math.max(0, index - 1)]?.id ?? next[0].id)
+      }
+      return next
+    })
+  }
+
+  const updateActiveTab = (patch: Partial<RepeaterTab>) => {
+    setTabs((prev) => prev.map((tab) => (tab.id === activeTabIdRef.current ? { ...tab, ...patch } : tab)))
+  }
 
   const handleSend = async () => {
+    const tab = tabsStateRef.current.find((item) => item.id === activeTabIdRef.current)
+    if (!tab || tab.sending) return
     setSending(true)
+    setTabs((prev) => prev.map((item) => item.id === tab.id ? { ...item, sending: true } : item))
     try {
-      const res = await repeaterSendRaw(rawRequest)
-      setResponse(res.rawResponse)
-      setResult(res)
+      const res = await repeaterSendRaw(tab.rawRequest)
+      setTabs((prev) => prev.map((item) => item.id === tab.id ? { ...item, response: res.rawResponse, result: res, sending: false } : item))
     } catch (e) {
-      setResponse(`Error sending request:\n${String(e)}`)
-      setResult(null)
+      setTabs((prev) => prev.map((item) => item.id === tab.id ? { ...item, response: `Error sending request:\n${String(e)}`, result: null, sending: false } : item))
     } finally {
       setSending(false)
     }
   }
 
+  useEffect(() => {
+    const addPending = () => {
+      const next = localStorage.getItem('skuntir:repeaterRaw')
+      if (!next) return
+      localStorage.removeItem('skuntir:repeaterRaw')
+      addTab(next)
+    }
+    addPending()
+
+    settingsGet()
+      .then((s) => {
+        if (s.showExamples === false) {
+          setTabs((prev) => prev.map((tab) => tab.rawRequest === exampleRawRequest ? { ...tab, rawRequest: '' } : tab))
+        } else {
+          setTabs((prev) => prev.map((tab) => tab.rawRequest.trim() === '' ? { ...tab, rawRequest: exampleRawRequest } : tab))
+        }
+      })
+      .catch(() => {})
+
+    const onAdd = (ev: Event) => {
+      const e = ev as CustomEvent
+      const rawRequest = e.detail?.rawRequest
+      if (typeof rawRequest === 'string') addTab(rawRequest)
+    }
+    const onHotkey = (ev: Event) => {
+      const e = ev as CustomEvent
+      if (e.detail?.action === 'send-repeater') handleSend().catch(() => {})
+      if (e.detail?.action === 'new-tab') addTab('')
+      if (e.detail?.action === 'close-tab') closeTab()
+    }
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+        ev.preventDefault()
+        handleSend()
+      }
+    }
+    window.addEventListener('skuntir:repeater:add', onAdd)
+    window.addEventListener('skuntir:hotkey', onHotkey)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('skuntir:repeater:add', onAdd)
+      window.removeEventListener('skuntir:hotkey', onHotkey)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
+
   return (
     <div className="flex flex-col h-full bg-background">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
-        <div className="text-sm font-semibold text-foreground">Repeater</div>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="text-sm font-semibold text-foreground">Repeater</div>
+          <Badge variant="outline" className="text-[10px]">{tabs.length} tab{tabs.length === 1 ? '' : 's'}</Badge>
+        </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={handleSend} disabled={sending}>
+          <Button variant="outline" size="sm" onClick={() => addTab('')}>
+            <Plus className="w-4 h-4 mr-2" />
+            New
+          </Button>
+          <Button size="sm" onClick={handleSend} disabled={sending || !activeTab}>
             <Send className="w-4 h-4 mr-2" />
-            {sending ? 'Sending...' : 'Send'}
+            {activeTab?.sending ? 'Sending...' : 'Send'}
           </Button>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => appNavigate('intruder', { templateRaw: rawRequest })}
+            onClick={() => activeTab && appNavigate('intruder', { templateRaw: activeTab.rawRequest })}
+            disabled={!activeTab}
           >
             <Zap className="w-4 h-4 mr-2" />
             Send to Intruder
@@ -2001,44 +3389,81 @@ Accept: application/json
         </div>
       </div>
 
-      <div className="flex-1 flex">
-        <div className="flex-1 flex flex-col border-r border-border">
-          <div className="flex-1 p-2">
+      <div className="flex items-center gap-1 border-b border-border bg-muted/30 px-2 py-1 overflow-x-auto">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => activateTab(tab.id)}
+            className={cn(
+              'group flex items-center gap-2 h-8 max-w-48 rounded-md border px-3 text-xs transition-colors',
+              activeTabId === tab.id
+                ? 'bg-card border-border text-foreground shadow-sm'
+                : 'bg-transparent border-transparent text-muted-foreground hover:bg-card/70 hover:text-foreground'
+            )}
+          >
+            <span className="truncate">{tab.title}</span>
+            {tab.result && (
+              <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                {tab.result.statusCode}
+              </Badge>
+            )}
+            {tabs.length > 1 && (
+              <X
+                className="w-3 h-3 opacity-60 hover:opacity-100"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  closeTab(tab.id)
+                }}
+              />
+            )}
+          </button>
+        ))}
+      </div>
+
+      <ResizablePanelGroup direction="horizontal" className="flex-1">
+        <ResizablePanel defaultSize={44} minSize={25} className="flex flex-col">
+          <div className="px-3 py-2 border-b border-border text-xs font-medium text-muted-foreground">
+            Request
+          </div>
+          <div className="flex-1 p-2 min-h-0">
             <Textarea
               className="h-full font-mono text-xs resize-none"
-              value={rawRequest}
-              onChange={(e) => setRawRequest(e.target.value)}
+              value={activeTab?.rawRequest ?? ''}
+              onChange={(e) => updateActiveTab({ rawRequest: e.target.value, response: null, result: null })}
             />
           </div>
-        </div>
+        </ResizablePanel>
 
-        <div className="flex-1 flex flex-col">
+        <ResizableHandle withHandle className="bg-border hover:bg-primary/20 transition-colors" />
+
+        <ResizablePanel defaultSize={56} minSize={35} className="flex flex-col">
           <div className="p-2 border-b border-border flex items-center justify-between">
             <span className="text-sm font-medium">Response</span>
-            {result && (
+            {activeTab?.result && (
               <div className="flex items-center gap-3 text-xs">
                 <Badge 
                   variant="outline" 
                   className={cn(
-                    result.statusCode >= 200 && result.statusCode < 300
+                    activeTab.result.statusCode >= 200 && activeTab.result.statusCode < 300
                       ? 'bg-status-success/10 text-status-success border-status-success/20'
-                      : result.statusCode >= 400
+                      : activeTab.result.statusCode >= 400
                         ? 'bg-status-server-error/10 text-status-server-error border-status-server-error/20'
                         : ''
                   )}
                 >
-                  {result.statusCode}
+                  {activeTab.result.statusCode}
                 </Badge>
-                <span className="text-muted-foreground">Time: {formatDurationMs(result.durationMs)}</span>
-                <span className="text-muted-foreground">Size: {formatBytes(result.size)}</span>
+                <span className="text-muted-foreground">Time: {formatDurationMs(activeTab.result.durationMs)}</span>
+                <span className="text-muted-foreground">Size: {formatBytes(activeTab.result.size)}</span>
               </div>
             )}
           </div>
-          <div className="flex-1 p-2">
-            {response ? (
+          <div className="flex-1 p-2 min-h-0">
+            {activeTab?.response ? (
               <Textarea 
                 className="h-full font-mono text-xs resize-none bg-muted/30"
-                value={response}
+                value={activeTab.response}
                 readOnly
               />
             ) : (
@@ -2050,8 +3475,8 @@ Accept: application/json
               </div>
             )}
           </div>
-        </div>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   )
 }
@@ -2063,26 +3488,115 @@ export function InterceptView({
   interceptEnabled: boolean
   onInterceptToggle: (enabled: boolean) => void
 }) {
-  const [active, setActive] = useState<{ interceptionId: string; raw: string } | null>(null)
+  const [queue, setQueue] = useState<InterceptQueueItem[]>([])
+  const [activeId, setActiveId] = useState<string | null>(null)
   const [editedRaw, setEditedRaw] = useState('')
   const [busy, setBusy] = useState(false)
+  const activeIdRef = useRef<string | null>(null)
+  const active = queue.find((item) => item.interceptionId === activeId) ?? queue[0] ?? null
+
+  const persistQueue = (items: InterceptQueueItem[]) => {
+    localStorage.setItem('skuntir:interceptQueue', JSON.stringify(items.slice(0, 100)))
+  }
+
+  const activateIntercept = (item: InterceptQueueItem | null) => {
+    activeIdRef.current = item?.interceptionId ?? null
+    setActiveId(item?.interceptionId ?? null)
+    setEditedRaw(item?.raw ?? '')
+  }
+
+  const removeFromQueue = (interceptionId: string) => {
+    setQueue((prev) => {
+      const next = prev.filter((item) => item.interceptionId !== interceptionId)
+      persistQueue(next)
+      const nextActive = next[0] ?? null
+      activateIntercept(nextActive)
+      return next
+    })
+  }
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null
-    const init = async () => {
-      unlisten = await onBackendEvent((ev: BackendEvent) => {
-        if (ev.type !== 'InterceptPaused') return
-        setActive({ interceptionId: ev.payload.interception_id, raw: ev.payload.raw })
-        setEditedRaw(ev.payload.raw)
+    try {
+      const stored = JSON.parse(localStorage.getItem('skuntir:interceptQueue') || '[]') as InterceptQueueItem[]
+      setQueue(stored)
+      activateIntercept(stored[0] ?? null)
+    } catch {
+      localStorage.removeItem('skuntir:interceptQueue')
+    }
+
+    const onPaused = (ev: Event) => {
+      const e = ev as CustomEvent<InterceptQueueItem>
+      const item = e.detail
+      if (!item?.interceptionId || !item.raw) return
+
+      setQueue((prev) => {
+        const next = [item, ...prev.filter((queued) => queued.interceptionId !== item.interceptionId)].slice(0, 100)
+        persistQueue(next)
+        if (!activeIdRef.current) activateIntercept(item)
+        return next
       })
     }
 
-    init().catch(() => {})
-
-    return () => {
-      if (unlisten) unlisten()
-    }
+    window.addEventListener('skuntir:intercept:paused', onPaused)
+    return () => window.removeEventListener('skuntir:intercept:paused', onPaused)
   }, [])
+
+  useEffect(() => {
+    interceptQueue()
+      .then((items) => {
+        if (!items.length) return
+        setQueue((prev) => {
+          const next = [
+            ...items,
+            ...prev.filter((queued) => !items.some((item) => item.interceptionId === queued.interceptionId)),
+          ].slice(0, 100)
+          persistQueue(next)
+          if (!activeIdRef.current) activateIntercept(next[0] ?? null)
+          return next
+        })
+      })
+      .catch(() => {})
+  }, [])
+
+  const forwardActive = async () => {
+    if (!active || busy) return
+    const current = active
+    setBusy(true)
+    try {
+      await interceptForward(current.interceptionId, editedRaw)
+      removeFromQueue(current.interceptionId)
+    } catch (e) {
+      removeFromQueue(current.interceptionId)
+      uiToastError('Could not forward request', String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const dropActive = async () => {
+    if (!active || busy) return
+    const current = active
+    setBusy(true)
+    try {
+      await interceptDrop(current.interceptionId)
+      removeFromQueue(current.interceptionId)
+    } catch (e) {
+      removeFromQueue(current.interceptionId)
+      uiToastError('Could not drop request', String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    const onHotkey = (ev: Event) => {
+      const e = ev as CustomEvent
+      if (e.detail?.action === 'forward') forwardActive().catch(() => {})
+      if (e.detail?.action === 'drop') dropActive().catch(() => {})
+    }
+    window.addEventListener('skuntir:hotkey', onHotkey)
+    return () => window.removeEventListener('skuntir:hotkey', onHotkey)
+  }, [active, busy, editedRaw])
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -2114,16 +3628,7 @@ export function InterceptView({
                 variant="outline" 
                 size="sm" 
                 disabled={busy}
-                onClick={async () => {
-                  setBusy(true)
-                  try {
-                    await interceptForward(active.interceptionId, editedRaw)
-                    setActive(null)
-                    setEditedRaw('')
-                  } finally {
-                    setBusy(false)
-                  }
-                }}
+                onClick={() => forwardActive().catch(() => {})}
               >
                 <ArrowUp className="w-4 h-4 mr-2" />
                 Forward
@@ -2132,16 +3637,7 @@ export function InterceptView({
                 variant="outline" 
                 size="sm" 
                 disabled={busy}
-                onClick={async () => {
-                  setBusy(true)
-                  try {
-                    await interceptDrop(active.interceptionId)
-                    setActive(null)
-                    setEditedRaw('')
-                  } finally {
-                    setBusy(false)
-                  }
-                }}
+                onClick={() => dropActive().catch(() => {})}
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Drop
@@ -2170,17 +3666,46 @@ export function InterceptView({
             'w-1.5 h-1.5 rounded-full',
             interceptEnabled ? 'bg-destructive animate-pulse' : 'bg-muted-foreground'
           )} />
-          {interceptEnabled ? (active ? 'Paused' : 'Waiting for request...') : 'Passthrough mode'}
+          {interceptEnabled ? (active ? `${queue.length} paused` : 'Waiting for request...') : 'Passthrough mode'}
         </Badge>
       </div>
 
-      <div className="flex-1 p-4">
-        {active ? (
-          <Textarea 
-            className="h-full font-mono text-xs resize-none"
-            value={editedRaw}
-            onChange={(e) => setEditedRaw(e.target.value)}
-          />
+      <div className="flex-1 min-h-0 flex">
+        {queue.length > 0 && (
+          <div className="w-72 border-r border-border bg-muted/20 overflow-auto">
+            {queue.map((item, index) => {
+              const firstLine = item.raw.split(/\r?\n/, 1)[0] || 'Request'
+              return (
+                <button
+                  key={item.interceptionId}
+                  type="button"
+                  onClick={() => activateIntercept(item)}
+                  className={cn(
+                    'w-full border-b border-border/60 p-3 text-left text-xs hover:bg-muted/50',
+                    active?.interceptionId === item.interceptionId && 'bg-primary/10'
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-foreground">Paused #{queue.length - index}</span>
+                    <Badge variant="outline" className="text-[10px]">hold</Badge>
+                  </div>
+                  {item.kind === 'websocket' && (
+                    <Badge variant="secondary" className="mt-2 text-[10px]">websocket</Badge>
+                  )}
+                  <div className="mt-1 truncate font-mono text-muted-foreground">{firstLine}</div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        <div className="flex-1 p-4 min-w-0">
+          {active ? (
+            <Textarea
+              className="h-full font-mono text-xs resize-none"
+              value={editedRaw}
+              onChange={(e) => setEditedRaw(e.target.value)}
+            />
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
             <div className="text-center">
@@ -2192,11 +3717,12 @@ export function InterceptView({
             </div>
           </div>
         )}
+        </div>
       </div>
 
       <div className="p-3 border-t border-border bg-muted/30 flex items-center justify-between text-xs text-muted-foreground">
         <span>{active ? `Interception: ${active.interceptionId}` : 'No active interception'}</span>
-        <span></span>
+        <span>{queue.length > 1 ? `${queue.length - 1} waiting behind this request` : ''}</span>
       </div>
     </div>
   )
@@ -3325,6 +4851,18 @@ export function SettingsView() {
                     className="mt-1.5 h-9"
                   />
                 </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Max App Memory (MB)</label>
+                  <Input
+                    type="number"
+                    min={128}
+                    max={65536}
+                    value={settings?.maxMemoryMb ?? 512}
+                    onChange={(e) => update({ maxMemoryMb: Number(e.target.value) })}
+                    className="mt-1.5 h-9"
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">Caps memory-heavy history, leak, and attack-surface collection sizes.</p>
+                </div>
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium">Hardware Acceleration</p>
@@ -3373,9 +4911,36 @@ export function SettingsView() {
         </TabsContent>
 
         <TabsContent value="scanner" className="mt-4">
-          <Card className="p-5">
-            <h3 className="text-sm font-semibold mb-4">Scanner Defaults</h3>
-            <p className="text-sm text-muted-foreground">Configure scanner settings in the Scanner tab.</p>
+          <Card className="p-5 bg-card border-border">
+            <h3 className="text-sm font-semibold text-foreground mb-4">Scanner Defaults</h3>
+            <div className="grid max-w-2xl gap-4">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Scanner Memory Budget (MB)</label>
+                <Input
+                  type="number"
+                  min={64}
+                  max={32768}
+                  value={settings?.scannerMemoryMb ?? 256}
+                  onChange={(e) => update({ scannerMemoryMb: Number(e.target.value) })}
+                  className="mt-1.5 h-9"
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">Used to cap scan batches, API leak scans, and scanner result processing.</p>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Max Scan Rows</label>
+                <Input
+                  type="number"
+                  min={100}
+                  max={250000}
+                  value={settings?.scannerMaxRows ?? 5000}
+                  onChange={(e) => update({ scannerMaxRows: Number(e.target.value) })}
+                  className="mt-1.5 h-9"
+                />
+              </div>
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                Effective scan size is the smaller of Max Scan Rows and the memory-derived budget.
+              </div>
+            </div>
           </Card>
         </TabsContent>
 
@@ -3386,12 +4951,14 @@ export function SettingsView() {
               {[
                 { action: 'Send to Repeater', keys: 'Ctrl+R' },
                 { action: 'Send to Intruder', keys: 'Ctrl+I' },
+                { action: 'Send Repeater request', keys: 'Ctrl+Enter' },
                 { action: 'Forward Request', keys: 'Ctrl+F' },
                 { action: 'Drop Request', keys: 'Ctrl+D' },
                 { action: 'Toggle Intercept', keys: 'Ctrl+Shift+I' },
+                { action: 'Focus Search', keys: 'Ctrl+K' },
                 { action: 'Search', keys: 'Ctrl+Shift+F' },
-                { action: 'New Tab', keys: 'Ctrl+T' },
-                { action: 'Close Tab', keys: 'Ctrl+W' },
+                { action: 'New Repeater Tab', keys: 'Ctrl+T' },
+                { action: 'Close Repeater Tab', keys: 'Ctrl+W' },
                 { action: 'Save Project', keys: 'Ctrl+S' },
                 { action: 'Open Project', keys: 'Ctrl+O' },
               ].map((item) => (

@@ -18,6 +18,8 @@ import {
   Code,
   GitCompare,
   Puzzle,
+  KeyRound,
+  Network,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -37,6 +39,8 @@ const iconMap: Record<string, React.ComponentType<{ className?: string; strokeWi
   Code,
   GitCompare,
   Puzzle,
+  KeyRound,
+  Network,
 }
 
 interface AppSidebarProps {
@@ -52,9 +56,9 @@ export function AppSidebar({
   collapsed,
   onToggleCollapse,
 }: AppSidebarProps) {
-  const mainNavItems = navItems.slice(0, 5)
-  const toolsNavItems = navItems.slice(5, 11)
-  const bottomNavItems = navItems.slice(11)
+  const mainNavItems = navItems.slice(0, 7)
+  const toolsNavItems = navItems.slice(7, 13)
+  const bottomNavItems = navItems.slice(13)
 
   const renderNavItem = (item: typeof navItems[0]) => {
     const Icon = iconMap[item.icon] || LayoutDashboard

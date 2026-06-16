@@ -83,7 +83,9 @@ impl IntruderManager {
 
         let markers = extract_markers(&req.template_raw);
         if markers.is_empty() {
-            return Err(AppError::InvalidInput("no §markers§ found in template".into()));
+            return Err(AppError::InvalidInput(
+                "no §markers§ found in template".into(),
+            ));
         }
 
         let template = req.template_raw.clone();
@@ -96,7 +98,8 @@ impl IntruderManager {
                 let mut out = Vec::with_capacity(payloads.len() * markers.len());
                 for m in &markers {
                     for p in &payloads {
-                        let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+                        let mut map: std::collections::HashMap<String, String> =
+                            std::collections::HashMap::new();
                         map.insert(m.clone(), p.clone());
                         out.push(apply_payload_map(&template, &map));
                     }
@@ -111,16 +114,22 @@ impl IntruderManager {
                     )));
                 }
                 if payload_sets.iter().any(|s| s.is_empty()) {
-                    return Err(AppError::InvalidInput("one or more payload sets are empty".into()));
+                    return Err(AppError::InvalidInput(
+                        "one or more payload sets are empty".into(),
+                    ));
                 }
                 let total = payload_sets.iter().map(|s| s.len()).min().unwrap_or(0);
                 if total == 0 {
                     return Err(AppError::InvalidInput("no payloads provided".into()));
                 }
                 let mut out = Vec::with_capacity(total);
-                let mut payload_iters = payload_sets.iter().map(|set| set.iter()).collect::<Vec<_>>();
+                let mut payload_iters = payload_sets
+                    .iter()
+                    .map(|set| set.iter())
+                    .collect::<Vec<_>>();
                 for _ in 0..total {
-                    let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+                    let mut map: std::collections::HashMap<String, String> =
+                        std::collections::HashMap::new();
                     for (m, payload_iter) in markers.iter().zip(payload_iters.iter_mut()) {
                         if let Some(payload) = payload_iter.next() {
                             map.insert(m.clone(), payload.clone());
@@ -138,7 +147,9 @@ impl IntruderManager {
                     )));
                 }
                 if payload_sets.iter().any(|s| s.is_empty()) {
-                    return Err(AppError::InvalidInput("one or more payload sets are empty".into()));
+                    return Err(AppError::InvalidInput(
+                        "one or more payload sets are empty".into(),
+                    ));
                 }
                 let cap: usize = 5000;
                 let mut total: usize = 1;
@@ -153,7 +164,8 @@ impl IntruderManager {
                 let mut idxs = vec![0usize; markers.len()];
                 let mut out = Vec::with_capacity(total);
                 loop {
-                    let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+                    let mut map: std::collections::HashMap<String, String> =
+                        std::collections::HashMap::new();
                     for (pos, m) in markers.iter().enumerate() {
                         map.insert(m.clone(), payload_sets[pos][idxs[pos]].clone());
                     }
@@ -182,7 +194,10 @@ impl IntruderManager {
                 if payloads.is_empty() {
                     return Err(AppError::InvalidInput("no payloads provided".into()));
                 }
-                payloads.iter().map(|p| apply_payload_all(&template, p)).collect()
+                payloads
+                    .iter()
+                    .map(|p| apply_payload_all(&template, p))
+                    .collect()
             }
         };
         let payload_count = raw_requests.len() as i64;
@@ -192,7 +207,13 @@ impl IntruderManager {
         let config_json = serde_json::to_string(&req).unwrap_or_else(|_| "{}".into());
         let store = self.store.get();
         store
-            .intruder_attack_insert(&attack_id, started_ms, "running", &req.template_raw, &config_json)
+            .intruder_attack_insert(
+                &attack_id,
+                started_ms,
+                "running",
+                &req.template_raw,
+                &config_json,
+            )
             .await?;
 
         let (stop_tx, mut stop_rx) = oneshot::channel();
@@ -303,7 +324,13 @@ impl IntruderManager {
                             Some(raw),
                         )
                     }
-                    Err(e) => (None, Some(start.elapsed().as_millis() as i64), None, Some(e.to_string()), None),
+                    Err(e) => (
+                        None,
+                        Some(start.elapsed().as_millis() as i64),
+                        None,
+                        Some(e.to_string()),
+                        None,
+                    ),
                 };
 
                 let id = Uuid::new_v4().to_string();
@@ -345,8 +372,13 @@ impl IntruderManager {
                 });
             }
 
-            let _ = store.intruder_attack_update_status(&attack_id_for_task, "completed").await;
-            events.emit(BackendEvent::IntruderCompleted { ts_ms: now_ms(), attack_id: attack_id_for_task.clone() });
+            let _ = store
+                .intruder_attack_update_status(&attack_id_for_task, "completed")
+                .await;
+            events.emit(BackendEvent::IntruderCompleted {
+                ts_ms: now_ms(),
+                attack_id: attack_id_for_task.clone(),
+            });
             let mut lock = running_ref.lock().await;
             *lock = None;
         });
@@ -371,11 +403,20 @@ impl IntruderManager {
         Ok(())
     }
 
-    pub async fn results_list(&self, attack_id: String, limit: u32, offset: u32) -> Result<Vec<UiIntruderResult>> {
+    pub async fn results_list(
+        &self,
+        attack_id: String,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<UiIntruderResult>> {
         let store = self.store.get();
-        let rows = store.intruder_results_list(&attack_id, limit, offset).await?;
+        let rows = store
+            .intruder_results_list(&attack_id, limit, offset)
+            .await?;
         let mut out = Vec::with_capacity(rows.len());
-        for (id, ts_ms, seq, status_code, duration_ms, size, error, _raw_request, _raw_response) in rows {
+        for (id, ts_ms, seq, status_code, duration_ms, size, error, _raw_request, _raw_response) in
+            rows
+        {
             out.push(UiIntruderResult {
                 id,
                 ts_ms,
@@ -537,7 +578,8 @@ fn parse_raw_http_request(raw: &str) -> Result<ParsedRawRequest> {
             "https"
         };
         let base = format!("{}://{host}", infer_scheme());
-        let base = url::Url::parse(&base).map_err(|_| AppError::InvalidInput("invalid Host header".into()))?;
+        let base = url::Url::parse(&base)
+            .map_err(|_| AppError::InvalidInput("invalid Host header".into()))?;
         base.join(target)
             .map_err(|_| AppError::InvalidInput("invalid request target".into()))?
     };

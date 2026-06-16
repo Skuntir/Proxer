@@ -102,7 +102,12 @@ impl RuleSet {
         RuleDecision::default()
     }
 
-    pub async fn apply_response(&self, request_id: Uuid, started_ms: i64, resp: &mut ProxyResponse) {
+    pub async fn apply_response(
+        &self,
+        request_id: Uuid,
+        started_ms: i64,
+        resp: &mut ProxyResponse,
+    ) {
         let rules = self.rules.read().await;
         for rule in rules.iter().filter(|r| r.enabled) {
             if !rule.matcher.matches_response(resp) {
@@ -252,26 +257,31 @@ impl RuleAction {
                 set_header(&mut resp.headers, name, value);
                 Some("set_header".into())
             }
-            RuleAction::ReplaceResponseBodyBase64 { body_base64 } => match B64.decode(body_base64) {
-                Ok(bytes) => {
-                    resp.body = bytes;
-                    Some("replace_response_body".into())
+            RuleAction::ReplaceResponseBodyBase64 { body_base64 } => {
+                match B64.decode(body_base64) {
+                    Ok(bytes) => {
+                        resp.body = bytes;
+                        Some("replace_response_body".into())
+                    }
+                    Err(_) => None,
                 }
-                Err(_) => None,
-            },
+            }
             _ => None,
         }
     }
 }
 
 fn header_equals(headers: &[HeaderPair], name: &str, value: &str) -> bool {
-    headers.iter().any(|h| {
-        h.name.eq_ignore_ascii_case(name) && h.value.trim() == value.trim()
-    })
+    headers
+        .iter()
+        .any(|h| h.name.eq_ignore_ascii_case(name) && h.value.trim() == value.trim())
 }
 
 fn set_header(headers: &mut Vec<HeaderPair>, name: &str, value: &str) {
-    if let Some(h) = headers.iter_mut().find(|h| h.name.eq_ignore_ascii_case(name)) {
+    if let Some(h) = headers
+        .iter_mut()
+        .find(|h| h.name.eq_ignore_ascii_case(name))
+    {
         h.value = value.to_string();
         return;
     }

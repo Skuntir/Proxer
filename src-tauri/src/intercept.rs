@@ -3,6 +3,8 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::sync::{oneshot, RwLock};
 
+use serde::Serialize;
+
 use crate::{
     error::{AppError, Result},
     events::{BackendEvent, EventBus},
@@ -14,6 +16,7 @@ pub struct InterceptManager {
     events: EventBus,
     enabled: Arc<RwLock<bool>>,
     pending: Arc<DashMap<String, oneshot::Sender<InterceptDecision>>>,
+    queue: Arc<DashMap<String, InterceptQueueItem>>,
 }
 
 #[derive(Debug)]
@@ -22,12 +25,23 @@ pub enum InterceptDecision {
     Drop,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterceptQueueItem {
+    pub ts_ms: i64,
+    pub interception_id: String,
+    pub request_id: String,
+    pub raw: String,
+    pub kind: String,
+}
+
 impl InterceptManager {
     pub fn new(events: EventBus) -> Self {
         Self {
             events,
             enabled: Arc::new(RwLock::new(false)),
             pending: Arc::new(DashMap::new()),
+            queue: Arc::new(DashMap::new()),
         }
     }
 
@@ -51,18 +65,36 @@ impl InterceptManager {
 
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id.clone(), tx);
+        let raw = render_raw_request(req);
+        self.queue.insert(
+            id.clone(),
+            InterceptQueueItem {
+                ts_ms: crate::events::now_ms(),
+                interception_id: id.clone(),
+                request_id: id.clone(),
+                raw: raw.clone(),
+                kind: if is_websocket_request(req) {
+                    "websocket"
+                } else {
+                    "http"
+                }
+                .into(),
+            },
+        );
 
         self.events.emit(BackendEvent::InterceptPaused {
             ts_ms: crate::events::now_ms(),
             interception_id: id.clone(),
             request_id: id.clone(),
-            raw: render_raw_request(req),
+            raw,
         });
 
-        match rx.await {
+        let decision = match rx.await {
             Ok(decision) => Ok(Some(decision)),
             Err(_) => Ok(Some(InterceptDecision::Drop)),
-        }
+        };
+        self.queue.remove(&id);
+        decision
     }
 
     pub fn forward(&self, interception_id: &str, edited_raw: Option<String>) -> Result<()> {
@@ -70,6 +102,7 @@ impl InterceptManager {
             return Err(AppError::InvalidInput("unknown interception id".into()));
         };
         let _ = tx.send(InterceptDecision::Forward { edited_raw });
+        self.queue.remove(interception_id);
         Ok(())
     }
 
@@ -78,13 +111,33 @@ impl InterceptManager {
             return Err(AppError::InvalidInput("unknown interception id".into()));
         };
         let _ = tx.send(InterceptDecision::Drop);
+        self.queue.remove(interception_id);
         Ok(())
     }
+
+    pub fn queue(&self) -> Vec<InterceptQueueItem> {
+        let mut out = self
+            .queue
+            .iter()
+            .map(|i| i.value().clone())
+            .collect::<Vec<_>>();
+        out.sort_by_key(|i| i.ts_ms);
+        out
+    }
+}
+
+fn is_websocket_request(req: &ProxyRequest) -> bool {
+    req.headers.iter().any(|h| {
+        h.name.eq_ignore_ascii_case("upgrade") && h.value.eq_ignore_ascii_case("websocket")
+    })
 }
 
 pub fn render_raw_request(req: &ProxyRequest) -> String {
     let url = url::Url::parse(&req.url).ok();
-    let target = url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "/".to_string());
+    let target = url
+        .as_ref()
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| "/".to_string());
 
     let mut out = String::new();
     out.push_str(&format!("{} {} HTTP/1.1\r\n", req.method, target));
@@ -143,8 +196,8 @@ pub fn apply_raw_edit(mut req: ProxyRequest, edited_raw: &str) -> Result<ProxyRe
             .to_string()
     } else {
         let base = format!("{}://{}", req.scheme, req.host);
-        let base = url::Url::parse(&base)
-            .map_err(|_| AppError::InvalidInput("invalid host".into()))?;
+        let base =
+            url::Url::parse(&base).map_err(|_| AppError::InvalidInput("invalid host".into()))?;
         base.join(target)
             .map_err(|_| AppError::InvalidInput("invalid request target".into()))?
             .to_string()

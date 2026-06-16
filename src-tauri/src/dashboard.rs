@@ -63,7 +63,8 @@ pub struct DashboardDetails {
 }
 
 pub async fn compute_dashboard_stats(store: Arc<SqliteStore>) -> Result<DashboardStats> {
-    let (total_requests, total_req_bytes, avg_elapsed_ms, unique_hosts, total_resp_bytes) = store.traffic_stats().await?;
+    let (total_requests, total_req_bytes, avg_elapsed_ms, unique_hosts, total_resp_bytes) =
+        store.traffic_stats().await?;
     Ok(DashboardStats {
         total_requests,
         unique_hosts,
@@ -72,7 +73,10 @@ pub async fn compute_dashboard_stats(store: Arc<SqliteStore>) -> Result<Dashboar
     })
 }
 
-pub async fn compute_dashboard_details(store: Arc<SqliteStore>, range: Option<&str>) -> Result<DashboardDetails> {
+pub async fn compute_dashboard_details(
+    store: Arc<SqliteStore>,
+    range: Option<&str>,
+) -> Result<DashboardDetails> {
     let (c2, c3, c4, c5, c0) = store.traffic_status_buckets().await?;
     let top_hosts = store
         .traffic_top_hosts(6)
@@ -151,7 +155,9 @@ fn read_system_status() -> SystemStatus {
     let disk = if total == 0 {
         0
     } else {
-        (((used as f64) / (total as f64)) * 100.0).round().clamp(0.0, 100.0) as i64
+        (((used as f64) / (total as f64)) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as i64
     };
 
     SystemStatus { cpu, memory, disk }

@@ -2,15 +2,18 @@ use std::net::SocketAddr;
 
 #[cfg(windows)]
 pub fn enable_system_proxy(bind: SocketAddr) -> Result<(), String> {
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
-    use winreg::RegKey;
     use windows_sys::Win32::Networking::WinInet::{
         InternetSetOptionW, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
     };
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+    use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let internet = hkcu
-        .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", KEY_READ | KEY_WRITE)
+        .open_subkey_with_flags(
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            KEY_READ | KEY_WRITE,
+        )
         .map_err(|e| e.to_string())?;
 
     let backup_root = hkcu
@@ -37,8 +40,18 @@ pub fn enable_system_proxy(bind: SocketAddr) -> Result<(), String> {
     let _ = internet.set_value("ProxyOverride", &"<local>");
 
     unsafe {
-        InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_SETTINGS_CHANGED, std::ptr::null_mut(), 0);
-        InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_REFRESH, std::ptr::null_mut(), 0);
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_SETTINGS_CHANGED,
+            std::ptr::null_mut(),
+            0,
+        );
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_REFRESH,
+            std::ptr::null_mut(),
+            0,
+        );
     }
 
     Ok(())
@@ -46,20 +59,25 @@ pub fn enable_system_proxy(bind: SocketAddr) -> Result<(), String> {
 
 #[cfg(windows)]
 pub fn disable_system_proxy() -> Result<(), String> {
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
-    use winreg::RegKey;
     use windows_sys::Win32::Networking::WinInet::{
         InternetSetOptionW, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
     };
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+    use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let internet = hkcu
-        .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", KEY_READ | KEY_WRITE)
+        .open_subkey_with_flags(
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            KEY_READ | KEY_WRITE,
+        )
         .map_err(|e| e.to_string())?;
 
     let backup = hkcu
         .open_subkey_with_flags("Software\\Proxer\\ProxyBackup", KEY_READ | KEY_WRITE)
-        .or_else(|_| hkcu.open_subkey_with_flags("Software\\Skuntir\\ProxyBackup", KEY_READ | KEY_WRITE));
+        .or_else(|_| {
+            hkcu.open_subkey_with_flags("Software\\Skuntir\\ProxyBackup", KEY_READ | KEY_WRITE)
+        });
     if let Ok(backup) = backup {
         let active: u32 = backup.get_value("Active").unwrap_or(0);
         if active == 1 {
@@ -79,8 +97,18 @@ pub fn disable_system_proxy() -> Result<(), String> {
     }
 
     unsafe {
-        InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_SETTINGS_CHANGED, std::ptr::null_mut(), 0);
-        InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_REFRESH, std::ptr::null_mut(), 0);
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_SETTINGS_CHANGED,
+            std::ptr::null_mut(),
+            0,
+        );
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_REFRESH,
+            std::ptr::null_mut(),
+            0,
+        );
     }
 
     Ok(())

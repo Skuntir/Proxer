@@ -28,6 +28,13 @@ impl LogManager {
     }
 
     pub async fn emit(&self, level: &str, source: &str, message: &str) -> Result<UiLogEntry> {
+        match level.to_ascii_uppercase().as_str() {
+            "ERROR" => tracing::error!("[{source}] {message}"),
+            "WARNING" | "WARN" => tracing::warn!("[{source}] {message}"),
+            "DEBUG" => tracing::debug!("[{source}] {message}"),
+            _ => tracing::info!("[{source}] {message}"),
+        }
+
         let id = Uuid::new_v4().to_string();
         let ts_ms = now_ms();
         let store = self.store.get();
@@ -49,7 +56,12 @@ impl LogManager {
         Ok(entry)
     }
 
-    pub async fn list(&self, level: Option<String>, limit: u32, offset: u32) -> Result<Vec<UiLogEntry>> {
+    pub async fn list(
+        &self,
+        level: Option<String>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<UiLogEntry>> {
         let level_filter = level.as_deref().map(|s| s.to_uppercase());
         let store = self.store.get();
         let rows = store
@@ -85,4 +97,3 @@ fn format_time(ts_ms: i64) -> String {
     let ss = s % 60;
     format!("{:02}:{:02}:{:02}", hh, mm, ss)
 }
-

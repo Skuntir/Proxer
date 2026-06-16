@@ -6,16 +6,23 @@
 
 ## Description
 
-Proxer is a desktop HTTP and HTTPS interception proxy built with Tauri v2 and a Next.js UI. It captures traffic into a local SQLite database, shows it in a real-time History view, and builds a Sitemap from observed endpoints.
+Proxer is a desktop HTTP, HTTPS, and WebSocket interception proxy built with Tauri v2 and a Next.js UI. It captures traffic into a local SQLite database, shows it in a real-time History view, scans captured traffic for secrets and exposed surface area, and provides Burp-style tools for inspecting, replaying, and testing requests.
 
 ## Features
 
 - HTTP and HTTPS proxy with CONNECT support
+- WebSocket upgrade proxying and WebSocket traffic capture
 - Optional TLS interception for HTTPS visibility
+- Custom TLS client fingerprint profiles backed by `primp`, including Chrome, Safari, Edge, Firefox, Opera, and random profiles with Android, iOS, Linux, macOS, Windows, and random OS impersonation options
+- Upstream proxy support for direct, HTTP, HTTPS, and SOCKS5 routing
 - HTTP History with request and response details
 - Sitemap view that groups traffic by host and endpoint
-- Request interception with scope gating
+- Burp-style request interception queue with editable forward and drop actions
+- API Leaks view for secrets, tokens, keys, PGP blocks, credentials, high-entropy values, and other sensitive material found in captured traffic
+- Attack Surface graph with live domain, host, port, technology, endpoint, status-code, method, scheme, and leak relationships
+- MCP JSON-RPC server so agents can inspect traffic, control the proxy, manage interception, run scans, replay requests, and interact with Proxer tools
 - Built-in tools: Repeater, Intruder, Scanner, Decoder, Comparer, Logger, and Extensions
+- Scanner controls for memory and row limits
 - Sessions and projects: temporary session or project on disk (choose a folder on startup)
 - Light and dark themes with color and grayscale variants
 - Windows system proxy toggle with automatic restore on stop
@@ -28,8 +35,18 @@ Main navigation is:
 - Dashboard
 - HTTP History
 - Sitemap
+- API Leaks
+- Attack Surface
 - Intercept
 - Proxy
+- Scanner
+- Intruder
+- Repeater
+- Decoder
+- Comparer
+- Logger
+- Extensions
+- Settings
 
 ## How it works
 
@@ -37,7 +54,39 @@ Main navigation is:
 2. For HTTP requests, the proxy can capture full request and response data.
 3. For HTTPS requests, the browser first creates a CONNECT tunnel. You can capture the tunnel destination without decrypting it.
 4. If you enable TLS interception and install the generated CA certificate, Proxer can decrypt HTTPS traffic and capture full request and response data.
-5. Captured traffic is stored in a local SQLite database and drives the Dashboard, History, and Sitemap views.
+5. WebSocket upgrade requests can be proxied and observed alongside normal HTTP traffic.
+6. Captured traffic is stored in a local SQLite database and drives the Dashboard, History, Sitemap, API Leaks, Attack Surface, Scanner, and agent-facing MCP tools.
+
+## API leaks and attack surface
+
+The API Leaks view scans captured request and response headers and bodies with regex rules for common sensitive values. Findings are grouped by severity and include the request, host, location, evidence preview, method, URL, and status where available.
+
+The Attack Surface view builds a live graph from captured traffic. It organizes domains, hosts, grouped asset categories, individual ports, technologies, endpoints, and leak findings into a left-to-right hierarchy. Nodes include request counts, endpoint counts, schemes, methods, status-code buckets, and grouped leak occurrence counts. The graph supports pan, zoom, minimap navigation, draggable nodes, search, filtering, collapsible branches, and a details panel.
+
+## MCP agent access
+
+When enabled in Settings, Proxer starts a localhost MCP JSON-RPC server. Agents can use it to call Proxer actions such as:
+
+- `proxy.status`, `proxy.start`, and `proxy.stop`
+- `settings.get` and `settings.set`
+- `history.list`, `history.get`, and `history.replay`
+- `intercept.enabled`, `intercept.set_enabled`, `intercept.queue`, `intercept.forward`, and `intercept.drop`
+- `scanner.start`, `scanner.stop`, `scanner.status`, and `scanner.findings`
+- `rules.list`, `rules.upsert`, and `rules.remove`
+- `repeater.send_raw`
+- `api_leaks.scan`
+- `attack_surface.get`
+
+The server binds to `127.0.0.1` on the configured MCP port.
+
+## TLS fingerprinting and upstream proxies
+
+Settings include custom TLS fingerprint options based on `primp`:
+
+- Browser profiles: Chrome, Safari, Edge, Firefox, Opera, and random variants
+- OS profiles: Android, iOS, Linux, macOS, Windows, and random
+
+Proxy routing can be configured for direct connections or upstream HTTP, HTTPS, and SOCKS5 proxies.
 
 ## Install from prebuilt binaries
 
@@ -71,6 +120,10 @@ To see HTTPS request and response contents:
 4. Install the CA certificate in your browser or operating system trust store.
 
 If you do not install the CA, HTTPS traffic will typically appear as CONNECT tunnels only.
+
+### Intercept queue
+
+When interception is enabled, matching requests pause in the Intercept queue. You can inspect and edit the raw request before forwarding it, or drop it. Intercepted requests are surfaced in real time and can also be controlled through MCP.
 
 ## Build from source
 
@@ -165,6 +218,8 @@ Docker is intended for Linux builds and checks. It is not the recommended way to
 
 Captured traffic is stored locally. Do not use Proxer on networks or targets that you do not own or have explicit permission to test.
 
+Secret scanning can surface sensitive data from captured traffic. Treat project folders and exported data as sensitive.
+
 ## Repository layout
 
 - `frontend/` Next.js UI
@@ -176,6 +231,12 @@ Captured traffic is stored locally. Do not use Proxer on networks or targets tha
 
 - This is expected for HTTPS without TLS interception and CA installation.
 - Enable SSL Interception in the Proxy view and install the exported CA certificate.
+
+### API Leaks or Attack Surface look empty
+
+- Capture traffic first, then refresh or wait for the live update.
+- HTTPS request and response bodies require TLS interception and a trusted Proxer CA.
+- If a project has very large traffic history, increase scan limits carefully in Settings while staying within your RAM budget.
 
 ### Other apps stop working when system proxy is enabled
 

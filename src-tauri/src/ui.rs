@@ -48,7 +48,8 @@ pub fn ms_to_iso(ms: i64) -> String {
     let nanos = (ms % 1000).unsigned_abs() as u32 * 1_000_000;
     let dt = OffsetDateTime::from_unix_timestamp(secs).unwrap_or(OffsetDateTime::UNIX_EPOCH);
     let dt = dt.replace_nanosecond(nanos).unwrap_or(dt);
-    dt.format(&Rfc3339).unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+    dt.format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
 
 pub fn format_bytes(bytes: Option<i64>) -> String {

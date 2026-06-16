@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { HttpRequest } from '@/lib/proxer'
 import { Badge } from '@/components/ui/badge'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
 import { Lock, Unlock } from 'lucide-react'
 
@@ -44,6 +51,21 @@ function getStatusColor(status: number) {
     return 'text-status-server-error bg-status-server-error/10'
   }
   return 'text-muted-foreground'
+}
+
+function rawFromRequest(request: HttpRequest) {
+  const headers = Object.keys(request.requestHeaders).length ? request.requestHeaders : { Host: request.host }
+  return `${request.method} ${request.url || request.path} HTTP/1.1
+${Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join('\n')}
+${request.body ? `\n${request.body}` : ''}`
+}
+
+function navigate(nav: string, payload?: unknown) {
+  window.dispatchEvent(new CustomEvent('skuntir:navigate', { detail: { nav, payload } }))
+}
+
+function copyText(value: string) {
+  navigator.clipboard?.writeText(value).catch(() => {})
 }
 
 export function HttpHistoryTable({
@@ -120,53 +142,78 @@ export function HttpHistoryTable({
             {visibleRequests.map((request, localIndex) => {
               const index = start + localIndex
               return (
-              <button
-                key={request.id}
-                onClick={() => onSelectRequest(request)}
-                className={cn(
-                  'w-full grid grid-cols-[40px_70px_32px_1fr_70px_60px_60px] gap-2 px-4 py-2.5 text-sm transition-colors text-left border-b border-border/50',
-                  'hover:bg-muted/50',
-                  selectedRequest?.id === request.id && 'bg-primary/5 hover:bg-primary/10 border-l-2 border-l-primary'
-                )}
-              >
-                <div className="text-muted-foreground font-mono text-xs tabular-nums">{index + 1}</div>
-                <div>
-                  <Badge 
-                    variant="outline" 
+              <ContextMenu key={request.id}>
+                <ContextMenuTrigger asChild>
+                  <button
+                    onClick={() => onSelectRequest(request)}
+                    onContextMenu={() => onSelectRequest(request)}
                     className={cn(
-                      'font-mono text-[10px] font-bold px-1.5 py-0 transition-colors',
-                      getMethodColor(request.method)
+                      'w-full grid grid-cols-[40px_70px_32px_1fr_70px_60px_60px] gap-2 px-4 py-2.5 text-sm transition-colors text-left border-b border-border/50',
+                      'hover:bg-muted/50',
+                      selectedRequest?.id === request.id && 'bg-primary/5 hover:bg-primary/10 border-l-2 border-l-primary'
                     )}
                   >
-                    {request.method}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-center">
-                  {request.protocol === 'HTTPS' ? (
-                    <Lock className="w-3 h-3 text-emerald-500" />
-                  ) : (
-                    <Unlock className="w-3 h-3 text-muted-foreground" />
-                  )}
-                </div>
-                <div className="truncate font-mono text-xs flex items-center gap-1" title={request.url}>
-                  <span className="text-muted-foreground">{request.host}</span>
-                  <span className="text-foreground font-medium">{request.path}</span>
-                </div>
-                <div className="flex justify-center">
-                  <span className={cn(
-                    'font-mono font-semibold text-xs px-1.5 py-0.5 rounded',
-                    getStatusColor(request.statusCode)
-                  )}>
-                    {request.statusCode}
-                  </span>
-                </div>
-                <div className="text-right text-muted-foreground font-mono text-xs tabular-nums">
-                  {request.time}
-                </div>
-                <div className="text-right text-muted-foreground font-mono text-xs tabular-nums">
-                  {request.size}
-                </div>
-              </button>
+                    <div className="text-muted-foreground font-mono text-xs tabular-nums">{index + 1}</div>
+                    <div>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'font-mono text-[10px] font-bold px-1.5 py-0 transition-colors',
+                          getMethodColor(request.method)
+                        )}
+                      >
+                        {request.method}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-center">
+                      {request.protocol === 'HTTPS' ? (
+                        <Lock className="w-3 h-3 text-emerald-500" />
+                      ) : (
+                        <Unlock className="w-3 h-3 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="truncate font-mono text-xs flex items-center gap-1" title={request.url}>
+                      <span className="text-muted-foreground">{request.host}</span>
+                      <span className="text-foreground font-medium">{request.path}</span>
+                    </div>
+                    <div className="flex justify-center">
+                      <span className={cn(
+                        'font-mono font-semibold text-xs px-1.5 py-0.5 rounded',
+                        getStatusColor(request.statusCode)
+                      )}>
+                        {request.statusCode}
+                      </span>
+                    </div>
+                    <div className="text-right text-muted-foreground font-mono text-xs tabular-nums">
+                      {request.time}
+                    </div>
+                    <div className="text-right text-muted-foreground font-mono text-xs tabular-nums">
+                      {request.size}
+                    </div>
+                  </button>
+                </ContextMenuTrigger>
+                <ContextMenuContent className="w-52">
+                  <ContextMenuItem onClick={() => onSelectRequest(request)}>
+                    Open details
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => navigate('repeater', { rawRequest: rawFromRequest(request) })}>
+                    Send to Repeater
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => navigate('intruder', { templateRaw: rawFromRequest(request) })}>
+                    Send to Intruder
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onClick={() => copyText(request.url)}>
+                    Copy URL
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => copyText(rawFromRequest(request))}>
+                    Copy raw request
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => copyText(request.responseBody || '')} disabled={!request.responseBody}>
+                    Copy response body
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
               )
             })}
             </div>

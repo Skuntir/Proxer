@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use tauri::{path::BaseDirectory, Manager, State};
 
@@ -8,12 +8,18 @@ use http::header::HeaderName;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    api_leaks::{scan_api_leaks, ApiLeakSummary},
     app_state::AppState,
-    dashboard::{compute_dashboard_details, compute_dashboard_stats, DashboardDetails, DashboardStats},
-    extensions::UiExtension,
+    attack_surface::{build_attack_surface, AttackSurface},
+    dashboard::{
+        compute_dashboard_details, compute_dashboard_stats, DashboardDetails, DashboardStats,
+    },
     error::AppError,
     events::BackendEvent,
+    extensions::UiExtension,
+    fingerprint::{self, FingerprintOptions},
     http_types::{HistoryEntry, HistoryEntrySummary},
+    intercept::InterceptQueueItem,
     intruder::{IntruderStartRequest, IntruderStartResponse, UiIntruderResult},
     logs::UiLogEntry,
     project::load_session_config,
@@ -22,9 +28,12 @@ use crate::{
     scanner::{ScanStatus, UiVulnerability},
     settings::UiSettings,
     sitemap::{build_sitemap, UiSitemapNode},
-    tls::CaInfo,
-    ui::{format_bytes, format_duration_ms, header_map, ms_to_iso, parse_cookies_from_headers, UiHttpRequest},
     system_proxy,
+    tls::CaInfo,
+    ui::{
+        format_bytes, format_duration_ms, header_map, ms_to_iso, parse_cookies_from_headers,
+        UiHttpRequest,
+    },
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,14 +65,19 @@ pub async fn project_use_temporary(state: State<'_, AppState>) -> Result<Project
 }
 
 #[tauri::command]
-pub async fn project_open(state: State<'_, AppState>, path: String) -> Result<ProjectStatus, String> {
+pub async fn project_open(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ProjectStatus, String> {
     let p = PathBuf::from(path);
     state.open_project(p).await.map_err(String::from)?;
     project_status(state).await
 }
 
 #[tauri::command]
-pub async fn project_open_folder_dialog(state: State<'_, AppState>) -> Result<Option<ProjectStatus>, String> {
+pub async fn project_open_folder_dialog(
+    state: State<'_, AppState>,
+) -> Result<Option<ProjectStatus>, String> {
     let picked = tauri::async_runtime::spawn_blocking(|| {
         rfd::FileDialog::new()
             .set_title("Select a project folder")
@@ -144,14 +158,49 @@ pub async fn app_info() -> Result<AppInfo, String> {
 }
 
 #[tauri::command]
+pub async fn client_log(
+    state: State<'_, AppState>,
+    level: Option<String>,
+    source: Option<String>,
+    message: String,
+) -> Result<(), String> {
+    let normalized = match level
+        .unwrap_or_else(|| "INFO".into())
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "ERROR" => "ERROR",
+        "WARN" | "WARNING" => "WARNING",
+        "DEBUG" => "DEBUG",
+        _ => "INFO",
+    };
+    let src = source.unwrap_or_else(|| "frontend".into());
+    let msg = message.chars().take(2000).collect::<String>();
+    let _ = state.logs.emit(normalized, &src, &msg).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn settings_get(state: State<'_, AppState>) -> Result<UiSettings, String> {
     state.settings.get().await.map_err(String::from)
 }
 
 #[tauri::command]
-pub async fn settings_set(state: State<'_, AppState>, patch: serde_json::Value) -> Result<UiSettings, String> {
+pub async fn tls_fingerprint_options() -> Result<FingerprintOptions, String> {
+    Ok(fingerprint::options())
+}
+
+#[tauri::command]
+pub async fn settings_set(
+    state: State<'_, AppState>,
+    patch: serde_json::Value,
+) -> Result<UiSettings, String> {
     let before = state.settings.get().await.unwrap_or_default();
-    let res = state.settings.set_patch(patch).await.map_err(String::from)?;
+    let res = state
+        .settings
+        .set_patch(patch)
+        .await
+        .map_err(String::from)?;
 
     if before.system_proxy_enabled != res.system_proxy_enabled {
         let status = state.proxy.status().await;
@@ -202,14 +251,54 @@ pub async fn dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
 }
 
 #[tauri::command]
-pub async fn dashboard_details(state: State<'_, AppState>, range: Option<String>) -> Result<DashboardDetails, String> {
+pub async fn dashboard_details(
+    state: State<'_, AppState>,
+    range: Option<String>,
+) -> Result<DashboardDetails, String> {
     compute_dashboard_details(state.store.get(), range.as_deref())
         .await
         .map_err(String::from)
 }
 
 #[tauri::command]
-pub async fn sitemap_get(state: State<'_, AppState>, limit: Option<u32>) -> Result<Vec<UiSitemapNode>, String> {
+pub async fn api_leaks_scan(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<ApiLeakSummary, String> {
+    let settings = state.settings.get().await.unwrap_or_default();
+    let configured_limit =
+        memory_limited_rows(settings.scanner_max_rows, settings.scanner_memory_mb, 64);
+    let requested_limit = limit.unwrap_or(configured_limit);
+    scan_api_leaks(
+        state.store.get().as_ref(),
+        requested_limit.min(configured_limit),
+    )
+    .await
+    .map_err(String::from)
+}
+
+#[tauri::command]
+pub async fn attack_surface_get(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<AttackSurface, String> {
+    let settings = state.settings.get().await.unwrap_or_default();
+    let configured_limit =
+        memory_limited_rows(settings.max_history_items, settings.max_memory_mb, 48);
+    let requested_limit = limit.unwrap_or(configured_limit);
+    build_attack_surface(
+        state.store.get().as_ref(),
+        requested_limit.min(configured_limit),
+    )
+    .await
+    .map_err(String::from)
+}
+
+#[tauri::command]
+pub async fn sitemap_get(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<UiSitemapNode>, String> {
     build_sitemap(state.store.get(), limit.unwrap_or(2000))
         .await
         .map_err(String::from)
@@ -246,12 +335,21 @@ pub async fn config_export(state: State<'_, AppState>) -> Result<String, String>
 
 #[tauri::command]
 pub async fn config_import(state: State<'_, AppState>, json: String) -> Result<(), String> {
-    let parsed = serde_json::from_str::<ExportConfig>(&json).map_err(|e| format!("invalid config json: {e}"))?;
+    let parsed = serde_json::from_str::<ExportConfig>(&json)
+        .map_err(|e| format!("invalid config json: {e}"))?;
 
     let patch = serde_json::to_value(&parsed.settings).map_err(|e| e.to_string())?;
-    let _ = state.settings.set_patch(patch).await.map_err(String::from)?;
+    let _ = state
+        .settings
+        .set_patch(patch)
+        .await
+        .map_err(String::from)?;
 
-    state.tls.set_mitm_enabled(parsed.mitm_enabled).await.map_err(String::from)?;
+    state
+        .tls
+        .set_mitm_enabled(parsed.mitm_enabled)
+        .await
+        .map_err(String::from)?;
     state.intercept.set_enabled(parsed.intercept_enabled).await;
 
     for r in parsed.rules {
@@ -263,10 +361,25 @@ pub async fn config_import(state: State<'_, AppState>, json: String) -> Result<(
 }
 
 #[tauri::command]
-pub async fn scanner_start(state: State<'_, AppState>, limit: Option<u32>) -> Result<String, String> {
-    let id = state.scanner.start(limit.unwrap_or(5000)).await.map_err(String::from)?;
+pub async fn scanner_start(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let settings = state.settings.get().await.unwrap_or_default();
+    let configured_limit =
+        memory_limited_rows(settings.scanner_max_rows, settings.scanner_memory_mb, 64);
+    let id = state
+        .scanner
+        .start(limit.unwrap_or(configured_limit).min(configured_limit))
+        .await
+        .map_err(String::from)?;
     let _ = state.logs.emit("INFO", "scanner", "scan started").await;
     Ok(id)
+}
+
+fn memory_limited_rows(row_setting: i64, memory_mb: i64, rows_per_mb: u32) -> u32 {
+    let rows_by_memory = memory_mb.max(1).saturating_mul(rows_per_mb as i64);
+    row_setting.max(1).min(rows_by_memory).min(u32::MAX as i64) as u32
 }
 
 #[tauri::command]
@@ -296,7 +409,10 @@ pub async fn scanner_findings_list(
 }
 
 #[tauri::command]
-pub async fn intruder_start(state: State<'_, AppState>, req: IntruderStartRequest) -> Result<IntruderStartResponse, String> {
+pub async fn intruder_start(
+    state: State<'_, AppState>,
+    req: IntruderStartRequest,
+) -> Result<IntruderStartResponse, String> {
     let res = state.intruder.start(req).await.map_err(String::from)?;
     let _ = state.logs.emit("INFO", "intruder", "attack started").await;
     Ok(res)
@@ -332,7 +448,10 @@ pub async fn traffic_clear(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn extensions_list(state: State<'_, AppState>, installed: Option<bool>) -> Result<Vec<UiExtension>, String> {
+pub async fn extensions_list(
+    state: State<'_, AppState>,
+    installed: Option<bool>,
+) -> Result<Vec<UiExtension>, String> {
     state.extensions.list(installed).await.map_err(String::from)
 }
 
@@ -347,7 +466,11 @@ pub async fn extensions_install(state: State<'_, AppState>, id: String) -> Resul
 }
 
 #[tauri::command]
-pub async fn extensions_set_enabled(state: State<'_, AppState>, id: String, enabled: bool) -> Result<(), String> {
+pub async fn extensions_set_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
     state
         .extensions
         .set_enabled(&id, enabled)
@@ -355,13 +478,20 @@ pub async fn extensions_set_enabled(state: State<'_, AppState>, id: String, enab
         .map_err(String::from)?;
     let _ = state
         .logs
-        .emit("INFO", "extensions", &format!("{} {id}", if enabled { "enabled" } else { "disabled" }))
+        .emit(
+            "INFO",
+            "extensions",
+            &format!("{} {id}", if enabled { "enabled" } else { "disabled" }),
+        )
         .await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn proxy_start(state: State<'_, AppState>, port: Option<u16>) -> Result<ProxyStatus, String> {
+pub async fn proxy_start(
+    state: State<'_, AppState>,
+    port: Option<u16>,
+) -> Result<ProxyStatus, String> {
     let port = port.unwrap_or(8080);
     let status = state
         .proxy
@@ -375,13 +505,24 @@ pub async fn proxy_start(state: State<'_, AppState>, port: Option<u16>) -> Resul
 
     let settings = state.settings.get().await.unwrap_or_default();
     if settings.system_proxy_enabled {
-        if let Some(bind) = status.bind.as_ref().and_then(|b| b.parse::<SocketAddr>().ok()) {
+        if let Some(bind) = status
+            .bind
+            .as_ref()
+            .and_then(|b| b.parse::<SocketAddr>().ok())
+        {
             let _ = system_proxy::enable_system_proxy(bind);
         }
     }
     let _ = state
         .logs
-        .emit("INFO", "proxy", &format!("proxy started on {}", status.bind.clone().unwrap_or_default()))
+        .emit(
+            "INFO",
+            "proxy",
+            &format!(
+                "proxy started on {}",
+                status.bind.clone().unwrap_or_default()
+            ),
+        )
         .await;
     Ok(status)
 }
@@ -404,10 +545,18 @@ pub async fn tls_set_mitm_enabled(state: State<'_, AppState>, enabled: bool) -> 
     if enabled && state.tls.ca_info().await.is_none() {
         let _ = state.tls.generate_ca().await.map_err(String::from)?;
     }
-    state.tls.set_mitm_enabled(enabled).await.map_err(String::from)?;
+    state
+        .tls
+        .set_mitm_enabled(enabled)
+        .await
+        .map_err(String::from)?;
     let _ = state
         .logs
-        .emit("INFO", "tls", &format!("MITM {}", if enabled { "enabled" } else { "disabled" }))
+        .emit(
+            "INFO",
+            "tls",
+            &format!("MITM {}", if enabled { "enabled" } else { "disabled" }),
+        )
         .await;
     Ok(())
 }
@@ -450,16 +599,22 @@ fn downloads_proxer_dir(state: &AppState) -> Result<PathBuf, String> {
 
 fn validate_download_filename(name: &str) -> Result<(), String> {
     if name.trim().is_empty() {
-        return Err(String::from(AppError::InvalidInput("filename required".into())));
+        return Err(String::from(AppError::InvalidInput(
+            "filename required".into(),
+        )));
     }
     if name.contains('/') || name.contains('\\') || name.contains(':') {
-        return Err(String::from(AppError::InvalidInput("invalid filename".into())));
+        return Err(String::from(AppError::InvalidInput(
+            "invalid filename".into(),
+        )));
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn tls_export_ca_to_downloads(state: State<'_, AppState>) -> Result<ExportedCaFiles, String> {
+pub async fn tls_export_ca_to_downloads(
+    state: State<'_, AppState>,
+) -> Result<ExportedCaFiles, String> {
     if state.tls.ca_info().await.is_none() {
         let _ = state.tls.generate_ca().await.map_err(String::from)?;
     }
@@ -468,14 +623,20 @@ pub async fn tls_export_ca_to_downloads(state: State<'_, AppState>) -> Result<Ex
     let der = state.tls.export_ca_der().await.map_err(String::from)?;
 
     let dir = downloads_proxer_dir(&state)?;
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let ts = crate::events::now_ms();
     let pem_path = dir.join(format!("proxer-ca-{ts}.pem"));
     let cer_path = dir.join(format!("proxer-ca-{ts}.cer"));
 
-    tokio::fs::write(&pem_path, pem.as_bytes()).await.map_err(|e| e.to_string())?;
-    tokio::fs::write(&cer_path, &der).await.map_err(|e| e.to_string())?;
+    tokio::fs::write(&pem_path, pem.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::fs::write(&cer_path, &der)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let _ = state
         .logs
@@ -497,19 +658,31 @@ pub async fn tls_export_ca_to_downloads(state: State<'_, AppState>) -> Result<Ex
 }
 
 #[tauri::command]
-pub async fn downloads_write_text(state: State<'_, AppState>, filename: String, contents: String) -> Result<ExportedTextFile, String> {
+pub async fn downloads_write_text(
+    state: State<'_, AppState>,
+    filename: String,
+    contents: String,
+) -> Result<ExportedTextFile, String> {
     validate_download_filename(&filename)?;
     let dir = downloads_proxer_dir(&state)?;
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| e.to_string())?;
     let path = dir.join(filename);
-    tokio::fs::write(&path, contents.as_bytes()).await.map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, contents.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(ExportedTextFile {
         path: path.to_string_lossy().to_string(),
     })
 }
 
 #[tauri::command]
-pub async fn tls_import_ca_pem(state: State<'_, AppState>, cert_pem: String, key_pem: String) -> Result<CaInfo, String> {
+pub async fn tls_import_ca_pem(
+    state: State<'_, AppState>,
+    cert_pem: String,
+    key_pem: String,
+) -> Result<CaInfo, String> {
     state
         .tls
         .import_ca_pem(&cert_pem, &key_pem)
@@ -556,7 +729,10 @@ pub async fn ui_history_list(
 }
 
 #[tauri::command]
-pub async fn ui_history_get(state: State<'_, AppState>, id: String) -> Result<UiHttpRequest, String> {
+pub async fn ui_history_get(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<UiHttpRequest, String> {
     let store = state.store.get();
     let entry = store.get(&id).await.map_err(String::from)?;
 
@@ -580,7 +756,11 @@ pub async fn ui_history_get(state: State<'_, AppState>, id: String) -> Result<Ui
     let port = url
         .as_ref()
         .and_then(|u| u.port_or_known_default())
-        .unwrap_or(if entry.request.scheme == "https" { 443 } else { 80 });
+        .unwrap_or(if entry.request.scheme == "https" {
+            443
+        } else {
+            80
+        });
 
     let request_headers_pairs: Vec<(String, String)> = entry
         .request
@@ -680,7 +860,9 @@ pub async fn rules_list(state: State<'_, AppState>) -> Result<Vec<RuleSpec>, Str
 #[tauri::command]
 pub async fn rules_upsert(state: State<'_, AppState>, rule: RuleSpec) -> Result<(), String> {
     if rule.id.trim().is_empty() {
-        return Err(String::from(AppError::InvalidInput("rule id required".into())));
+        return Err(String::from(AppError::InvalidInput(
+            "rule id required".into(),
+        )));
     }
     state.rules.upsert(rule).await;
     Ok(())
@@ -693,7 +875,10 @@ pub async fn rules_remove(state: State<'_, AppState>, id: String) -> Result<bool
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub async fn repeater_send_raw(raw_request: Option<String>, rawRequest: Option<String>) -> Result<RepeaterSendResult, String> {
+pub async fn repeater_send_raw(
+    raw_request: Option<String>,
+    rawRequest: Option<String>,
+) -> Result<RepeaterSendResult, String> {
     let raw = raw_request
         .or(rawRequest)
         .ok_or_else(|| String::from(AppError::InvalidInput("missing rawRequest".into())))?;
@@ -719,7 +904,11 @@ pub async fn repeater_send_raw(raw_request: Option<String>, rawRequest: Option<S
     let body_bytes = resp.bytes().await.map_err(|e| e.to_string())?;
     let dur = start.elapsed().as_millis() as u64;
 
-    let mut raw = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or(""));
+    let mut raw = format!(
+        "HTTP/1.1 {} {}\r\n",
+        status.as_u16(),
+        status.canonical_reason().unwrap_or("")
+    );
     for (k, v) in headers.iter() {
         if let Ok(vs) = v.to_str() {
             raw.push_str(k.as_str());
@@ -740,7 +929,10 @@ pub async fn repeater_send_raw(raw_request: Option<String>, rawRequest: Option<S
 }
 
 #[tauri::command]
-pub async fn intercept_set_enabled(state: State<'_, AppState>, enabled: bool) -> Result<bool, String> {
+pub async fn intercept_set_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
     state.intercept.set_enabled(enabled).await;
     Ok(state.intercept.is_enabled().await)
 }
@@ -748,6 +940,13 @@ pub async fn intercept_set_enabled(state: State<'_, AppState>, enabled: bool) ->
 #[tauri::command]
 pub async fn intercept_get_enabled(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.intercept.is_enabled().await)
+}
+
+#[tauri::command]
+pub async fn intercept_queue(
+    state: State<'_, AppState>,
+) -> Result<Vec<InterceptQueueItem>, String> {
+    Ok(state.intercept.queue())
 }
 
 #[tauri::command]
@@ -763,8 +962,14 @@ pub async fn intercept_forward(
 }
 
 #[tauri::command]
-pub async fn intercept_drop(state: State<'_, AppState>, interception_id: String) -> Result<(), String> {
-    state.intercept.reject(&interception_id).map_err(String::from)
+pub async fn intercept_drop(
+    state: State<'_, AppState>,
+    interception_id: String,
+) -> Result<(), String> {
+    state
+        .intercept
+        .reject(&interception_id)
+        .map_err(String::from)
 }
 
 fn ui_from_summary(row: &HistoryEntrySummary) -> UiHttpRequest {
@@ -859,7 +1064,8 @@ fn parse_raw_http_request(raw: &str) -> crate::error::Result<ParsedRawRequest> {
         url::Url::parse(target)
             .map_err(|_| crate::error::AppError::InvalidInput("invalid URL".into()))?
     } else {
-        let host = host_hdr.ok_or_else(|| crate::error::AppError::InvalidInput("missing Host header".into()))?;
+        let host = host_hdr
+            .ok_or_else(|| crate::error::AppError::InvalidInput("missing Host header".into()))?;
         let infer_scheme = || -> &'static str {
             if host.contains(":443") {
                 return "https";

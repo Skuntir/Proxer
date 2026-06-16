@@ -69,7 +69,7 @@ impl ExtensionManager {
                 4.1,
                 "5.0k".to_string(),
                 "Utilities".to_string(),
-                ),
+            ),
         ];
         let s = store.get();
         s.extensions_seed_if_empty(&seed).await?;
@@ -80,7 +80,19 @@ impl ExtensionManager {
         let store = self.store.get();
         let rows = store.extensions_list(installed).await?;
         let mut out = Vec::with_capacity(rows.len());
-        for (id, name, author, description, version, installed, enabled, rating, downloads, category) in rows {
+        for (
+            id,
+            name,
+            author,
+            description,
+            version,
+            installed,
+            enabled,
+            rating,
+            downloads,
+            category,
+        ) in rows
+        {
             out.push(UiExtension {
                 id,
                 name,

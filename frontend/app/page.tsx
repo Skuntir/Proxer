@@ -8,6 +8,9 @@ import { DetailPanel } from '@/components/detail-panel'
 import { AppOverlays } from '@/components/app-overlays'
 import {
   HttpRequest,
+  clientLog,
+  configExport,
+  downloadsWriteText,
   formatBytes,
   formatDurationMs,
   interceptGetEnabled,
@@ -30,6 +33,8 @@ import { checkForUpdates } from '@/lib/update-check'
 import {
   DashboardView,
   TargetView,
+  ApiLeaksView,
+  AttackSurfaceView,
   ProxyView,
   InterceptView,
   ScannerView,
@@ -50,7 +55,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button'
 
 export default function ProxyApp() {
-  const [activeNav, setActiveNav] = useState('dashboard')
+const [activeNav, setActiveNav] = useState('dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [interceptEnabled, setInterceptEnabled] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -60,9 +65,31 @@ export default function ProxyApp() {
   const [projectReady, setProjectReady] = useState(false)
   const [startupProjectDialogOpen, setStartupProjectDialogOpen] = useState(false)
   const [startupProjectStatus, setStartupProjectStatus] = useState<ProjectStatus | null>(null)
+  const activeNavRef = useRef(activeNav)
   const themeSettingRef = useRef<string>('dark-color-amoled-red')
   const interceptToggleInFlightRef = useRef(false)
   const maxHistoryItemsRef = useRef(1000)
+  const logError = (source: string, error: unknown) => {
+    const message = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error)
+    clientLog('ERROR', source, message).catch(() => {})
+  }
+
+  const rememberPausedIntercept = (payload: { ts_ms: number; interception_id: string; request_id: string; raw: string }) => {
+    const item = {
+      tsMs: payload.ts_ms,
+      interceptionId: payload.interception_id,
+      requestId: payload.request_id,
+      raw: payload.raw,
+    }
+    try {
+      const current = JSON.parse(localStorage.getItem('skuntir:interceptQueue') || '[]') as typeof item[]
+      const next = [item, ...current.filter((queued) => queued.interceptionId !== item.interceptionId)].slice(0, 100)
+      localStorage.setItem('skuntir:interceptQueue', JSON.stringify(next))
+    } catch {
+      localStorage.setItem('skuntir:interceptQueue', JSON.stringify([item]))
+    }
+    window.dispatchEvent(new CustomEvent('skuntir:intercept:paused', { detail: item }))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -74,6 +101,7 @@ export default function ProxyApp() {
       })
       .catch(() => {
         if (cancelled) return
+        clientLog('ERROR', 'project', 'Could not read project status').catch(() => {})
         setStartupProjectDialogOpen(true)
       })
 
@@ -99,7 +127,9 @@ export default function ProxyApp() {
       try {
         const enabled = await interceptGetEnabled()
         if (!cancelled) setInterceptEnabled(enabled)
-      } catch {}
+      } catch (e) {
+        logError('intercept', e)
+      }
 
       try {
         const s = await settingsGet()
@@ -109,14 +139,17 @@ export default function ProxyApp() {
         setShowConnectTunnels(Boolean(s.showConnectTunnels))
         maxHistoryItemsRef.current = Math.max(100, Math.min(s.maxHistoryItems || 1000, 2000))
         if (s.autoUpdate !== false) {
-          checkForUpdates().catch(() => {})
+          checkForUpdates().catch((e) => logError('updates', e))
         }
-      } catch {}
+      } catch (e) {
+        logError('settings', e)
+      }
 
       try {
         const initial = await uiHistoryList(maxHistoryItemsRef.current, 0)
         if (!cancelled) setRequests(initial)
-      } catch {
+      } catch (e) {
+        logError('history', e)
         if (!cancelled) setRequests([])
       }
 
@@ -171,10 +204,14 @@ export default function ProxyApp() {
             )
           )
         }
+
+        if (ev.type === 'InterceptPaused') {
+          rememberPausedIntercept(ev.payload)
+        }
       })
     }
 
-    init()
+    init().catch((e) => logError('startup', e))
 
     unlistenSystem = onSystemThemeChange(() => {
       const t = themeSettingRef.current || 'dark-color-amoled-red'
@@ -233,10 +270,26 @@ export default function ProxyApp() {
     return filteredRequests.filter((r) => r.method !== 'CONNECT')
   }, [filteredRequests, showConnectTunnels])
 
+  const rawFromRequest = (request: HttpRequest) => {
+    const headers = Object.keys(request.requestHeaders).length ? request.requestHeaders : { Host: request.host }
+    return `${request.method} ${request.url || request.path} HTTP/1.1
+${Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n')}
+${request.body ? `\n${request.body}` : ''}`
+  }
+
+  const navigate = (nav: string, payload?: any) => {
+    window.dispatchEvent(new CustomEvent('skuntir:navigate', { detail: { nav, payload } }))
+  }
+
+  useEffect(() => {
+    activeNavRef.current = activeNav
+  }, [activeNav])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey) {
+      const mod = e.metaKey || e.ctrlKey
+      if (mod) {
         const shortcuts: Record<string, string> = {
           '1': 'dashboard',
           '2': 'history',
@@ -251,10 +304,65 @@ export default function ProxyApp() {
         if (shortcuts[e.key]) {
           e.preventDefault()
           setActiveNav(shortcuts[e.key])
+          return
         }
-        if (e.key === 'k') {
+        if (e.key.toLowerCase() === 'k' || (e.shiftKey && e.key.toLowerCase() === 'f')) {
           e.preventDefault()
           document.querySelector<HTMLInputElement>('input[type="text"]')?.focus()
+          return
+        }
+        if (e.shiftKey && e.key.toLowerCase() === 'i') {
+          e.preventDefault()
+          setInterceptEnabledSafe(!interceptEnabled)
+          return
+        }
+        if (e.key.toLowerCase() === 'r' && activeNav === 'repeater') {
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('skuntir:hotkey', { detail: { action: 'send-repeater' } }))
+          return
+        }
+        if (e.key.toLowerCase() === 'r' && selectedRequest) {
+          e.preventDefault()
+          navigate('repeater', { rawRequest: rawFromRequest(selectedRequest) })
+          return
+        }
+        if (e.key.toLowerCase() === 'i' && selectedRequest) {
+          e.preventDefault()
+          navigate('intruder', { templateRaw: rawFromRequest(selectedRequest) })
+          return
+        }
+        if (e.key.toLowerCase() === 'f' && activeNav === 'intercept') {
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('skuntir:hotkey', { detail: { action: 'forward' } }))
+          return
+        }
+        if (e.key.toLowerCase() === 'd' && activeNav === 'intercept') {
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('skuntir:hotkey', { detail: { action: 'drop' } }))
+          return
+        }
+        if (e.key.toLowerCase() === 't' && activeNav === 'repeater') {
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('skuntir:hotkey', { detail: { action: 'new-tab' } }))
+          return
+        }
+        if (e.key.toLowerCase() === 'w' && activeNav === 'repeater') {
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('skuntir:hotkey', { detail: { action: 'close-tab' } }))
+          return
+        }
+        if (e.key.toLowerCase() === 'o') {
+          e.preventDefault()
+          openProjectFolder()
+          return
+        }
+        if (e.key.toLowerCase() === 's') {
+          e.preventDefault()
+          configExport()
+            .then((json) => downloadsWriteText(`proxer-project-${Date.now()}.json`, json))
+            .then((r) => uiToastSuccess('Project exported', r.path))
+            .catch((err) => uiToastError('Could not save project', String(err)))
+          return
         }
       }
       if (e.key === 'Escape') {
@@ -264,7 +372,7 @@ export default function ProxyApp() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [activeNav, interceptEnabled, selectedRequest])
 
   useEffect(() => {
     const onNav = (ev: Event) => {
@@ -273,7 +381,11 @@ export default function ProxyApp() {
       if (!detail.nav) return
 
       if (detail.nav === 'repeater' && typeof detail.payload?.rawRequest === 'string') {
-        localStorage.setItem('skuntir:repeaterRaw', detail.payload.rawRequest)
+        if (activeNavRef.current === 'repeater') {
+          window.dispatchEvent(new CustomEvent('skuntir:repeater:add', { detail: { rawRequest: detail.payload.rawRequest } }))
+        } else {
+          localStorage.setItem('skuntir:repeaterRaw', detail.payload.rawRequest)
+        }
       }
       if (detail.nav === 'intruder' && typeof detail.payload?.templateRaw === 'string') {
         localStorage.setItem('skuntir:intruderTemplateRaw', detail.payload.templateRaw)
@@ -312,6 +424,10 @@ export default function ProxyApp() {
         return <DashboardView />
       case 'target':
         return <TargetView />
+      case 'api-leaks':
+        return <ApiLeaksView />
+      case 'attack-surface':
+        return <AttackSurfaceView />
       case 'proxy':
         return <ProxyView interceptEnabled={interceptEnabled} onInterceptToggle={setInterceptEnabledSafe} />
       case 'history':

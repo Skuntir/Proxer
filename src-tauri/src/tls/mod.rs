@@ -33,14 +33,17 @@ impl TlsManager {
 
         let app = mgr.app.clone();
         if let Ok(paths) = ca_paths(&app) {
-            if tokio::fs::try_exists(&paths.cert_pem).await.unwrap_or(false)
+            if tokio::fs::try_exists(&paths.cert_pem)
+                .await
+                .unwrap_or(false)
                 && tokio::fs::try_exists(&paths.key_pem).await.unwrap_or(false)
             {
                 if let (Ok(cert_pem), Ok(key_pem)) = (
                     tokio::fs::read_to_string(&paths.cert_pem).await,
                     tokio::fs::read_to_string(&paths.key_pem).await,
                 ) {
-                    if let Ok(ca) = CertificateAuthority::load_existing(paths, &cert_pem, &key_pem) {
+                    if let Ok(ca) = CertificateAuthority::load_existing(paths, &cert_pem, &key_pem)
+                    {
                         let mut lock = mgr.ca.write().await;
                         *lock = Some(Arc::new(ca));
                     }
@@ -78,9 +81,10 @@ impl TlsManager {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let ca = tauri::async_runtime::spawn_blocking(move || CertificateAuthority::generate(paths))
-            .await
-            .map_err(|e| AppError::Other(format!("CA generation task failed: {e}")))??;
+        let ca =
+            tauri::async_runtime::spawn_blocking(move || CertificateAuthority::generate(paths))
+                .await
+                .map_err(|e| AppError::Other(format!("CA generation task failed: {e}")))??;
 
         tokio::fs::write(&ca.cert_pem_path, ca.cert_pem.as_bytes()).await?;
         tokio::fs::write(&ca.key_pem_path, ca.key_pem.as_bytes()).await?;
@@ -89,7 +93,9 @@ impl TlsManager {
         *lock = Some(Arc::new(ca));
         self.leaf_cache.clear();
 
-        self.ca_info().await.ok_or_else(|| AppError::Other("failed to store CA".into()))
+        self.ca_info()
+            .await
+            .ok_or_else(|| AppError::Other("failed to store CA".into()))
     }
 
     pub async fn import_ca_pem(&self, cert_pem: &str, key_pem: &str) -> Result<CaInfo> {
@@ -105,7 +111,9 @@ impl TlsManager {
         let mut lock = self.ca.write().await;
         *lock = Some(Arc::new(ca));
         self.leaf_cache.clear();
-        self.ca_info().await.ok_or_else(|| AppError::Other("failed to store CA".into()))
+        self.ca_info()
+            .await
+            .ok_or_else(|| AppError::Other("failed to store CA".into()))
     }
 
     pub async fn server_config_for_host(&self, host: &str) -> Result<Arc<ServerConfig>> {
@@ -116,9 +124,10 @@ impl TlsManager {
         let ca = self.ca.read().await.clone().ok_or(AppError::MitmNoCa)?;
         let host = host.to_string();
         let host_for_task = host.clone();
-        let cfg = tauri::async_runtime::spawn_blocking(move || ca.server_config_for_host(&host_for_task))
-            .await
-            .map_err(|e| AppError::Other(format!("leaf cert task failed: {e}")))??;
+        let cfg =
+            tauri::async_runtime::spawn_blocking(move || ca.server_config_for_host(&host_for_task))
+                .await
+                .map_err(|e| AppError::Other(format!("leaf cert task failed: {e}")))??;
 
         let cfg = Arc::new(cfg);
         self.leaf_cache.insert(host, cfg.clone());
@@ -159,7 +168,9 @@ struct CaPaths {
 }
 
 fn ca_paths(app: &AppHandle) -> tauri::Result<CaPaths> {
-    let cert_pem = app.path().resolve("proxer/ca.pem", BaseDirectory::AppData)?;
+    let cert_pem = app
+        .path()
+        .resolve("proxer/ca.pem", BaseDirectory::AppData)?;
     let key_pem = app
         .path()
         .resolve("proxer/ca-key.pem", BaseDirectory::AppData)?;
