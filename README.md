@@ -1,7 +1,8 @@
 <h1 align="center">Proxer</h1>
 
-<img width="1920" height="1080" alt="636_1x_shots_so" src="https://github.com/user-attachments/assets/6cdfca9c-a2fc-4cb3-88c8-fb97e0b07acf" />
- 
+
+ <img width="1672" height="941" alt="banner" src="https://github.com/user-attachments/assets/8fdebf1c-f3b1-484b-aac0-6918013528a8" />
+
 
 ## Description
 
