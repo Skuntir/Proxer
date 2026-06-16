@@ -39,6 +39,27 @@ If Proxer cannot start the proxy listener on your preferred port:
 - Stop any other local proxies using that port.
 - Pick a different port in the Proxy screen.
 
+## `cargo tauri` is not installed
+
+This repo uses the Node Tauri CLI from `frontend/package.json`, so you do not need a global `cargo tauri` command.
+
+Use these commands from the repository root:
+
+- Development: `npm run dev`
+- Release build: `npm run build`
+- Portable build without installers: `npm run build:no-bundle`
+
+The helper scripts also use the local Node CLI:
+
+- macOS and Linux: `scripts/build-unix.sh`
+- Windows: `scripts\build-windows.bat`
+
+## `cargo run` cannot connect to localhost
+
+`cargo run` starts only the Rust side of the Tauri application. In development, the Tauri window loads the frontend from `http://localhost:3000`, so running the backend alone can fail with `Could not connect to localhost: Connection refused`.
+
+Use `npm run dev` from the repository root. It starts the Next.js dev server and then launches the Tauri app.
+
 ## HTTPS interception breaks some sites
 
 Some sites use certificate pinning or strict TLS behavior.
@@ -51,4 +72,3 @@ Options:
 ## Clear captured traffic does not remove my browser history
 
 The Clear action only removes captured traffic stored by Proxer. It does not change your browser history.
-

@@ -66,6 +66,7 @@ impl ScannerManager {
         let scan_id = format!("scan-{}", uuid::Uuid::new_v4());
         let (stop_tx, mut stop_rx) = oneshot::channel();
         let store = self.store.get();
+        let passive_plus_enabled = store.extension_enabled("ext.passive-scanner").await.unwrap_or(false);
         let events = self.events.clone();
         let progress_done = Arc::new(Mutex::new(0));
         let progress_total = Arc::new(Mutex::new(0));
@@ -133,7 +134,7 @@ impl ScannerManager {
                                 .and_then(|s| serde_json::from_str::<Vec<HeaderPair>>(&s).ok())
                                 .unwrap_or_default();
 
-                            let findings = passive_checks(&scheme, &host, &path, &resp_headers);
+                            let findings = passive_checks(&scheme, &host, &path, &resp_headers, passive_plus_enabled);
                             for f in findings {
                                 let _ = store.vulnerabilities_upsert(
                                     &f.id,
@@ -248,7 +249,7 @@ fn header_get(headers: &[HeaderPair], name: &str) -> Option<String> {
         .map(|h| h.value.clone())
 }
 
-fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPair]) -> Vec<UiVulnerability> {
+fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPair], passive_plus_enabled: bool) -> Vec<UiVulnerability> {
     let mut out = Vec::new();
 
     if scheme.eq_ignore_ascii_case("https") && header_get(resp_headers, "strict-transport-security").is_none() {
@@ -312,6 +313,56 @@ fn passive_checks(scheme: &str, host: &str, path: &str, resp_headers: &[HeaderPa
                 confidence: "Tentative".into(),
                 cvss: None,
                 cwe: Some("CWE-200".into()),
+                requests: 1,
+            });
+        }
+    }
+
+    if passive_plus_enabled {
+        if header_get(resp_headers, "content-security-policy").is_none() {
+            out.push(UiVulnerability {
+                id: format!("vuln:csp-missing:{host}:{path}"),
+                severity: "Medium".into(),
+                title: "Missing Content-Security-Policy".into(),
+                host: host.to_string(),
+                path: path.to_string(),
+                description: "The response does not include a Content-Security-Policy header.".into(),
+                remediation: "Add a restrictive Content-Security-Policy header to reduce XSS and injection impact.".into(),
+                confidence: "Firm".into(),
+                cvss: None,
+                cwe: Some("CWE-693".into()),
+                requests: 1,
+            });
+        }
+
+        if header_get(resp_headers, "referrer-policy").is_none() {
+            out.push(UiVulnerability {
+                id: format!("vuln:referrer-policy-missing:{host}:{path}"),
+                severity: "Low".into(),
+                title: "Missing Referrer-Policy".into(),
+                host: host.to_string(),
+                path: path.to_string(),
+                description: "The response does not include a Referrer-Policy header.".into(),
+                remediation: "Add Referrer-Policy, for example strict-origin-when-cross-origin.".into(),
+                confidence: "Firm".into(),
+                cvss: None,
+                cwe: Some("CWE-200".into()),
+                requests: 1,
+            });
+        }
+
+        if header_get(resp_headers, "permissions-policy").is_none() {
+            out.push(UiVulnerability {
+                id: format!("vuln:permissions-policy-missing:{host}:{path}"),
+                severity: "Info".into(),
+                title: "Missing Permissions-Policy".into(),
+                host: host.to_string(),
+                path: path.to_string(),
+                description: "The response does not include a Permissions-Policy header.".into(),
+                remediation: "Add Permissions-Policy to limit browser features that pages may use.".into(),
+                confidence: "Tentative".into(),
+                cvss: None,
+                cwe: Some("CWE-16".into()),
                 requests: 1,
             });
         }

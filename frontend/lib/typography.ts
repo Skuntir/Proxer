@@ -8,12 +8,16 @@ export function applyTypography(settings: Partial<Pick<Settings, 'fontSize' | 'f
 
   const family = (settings.fontFamily || 'mono').toString().toLowerCase()
   if (family === 'fira') {
+    root.style.setProperty('--font-sans', 'var(--font-fira-code)')
     root.style.setProperty('--font-mono', 'var(--font-fira-code)')
   } else if (family === 'source') {
+    root.style.setProperty('--font-sans', 'var(--font-source-code-pro)')
     root.style.setProperty('--font-mono', 'var(--font-source-code-pro)')
   } else if (family === 'mono') {
+    root.style.setProperty('--font-sans', 'var(--font-jetbrains-mono)')
     root.style.setProperty('--font-mono', 'var(--font-jetbrains-mono)')
   } else {
+    root.style.setProperty('--font-sans', 'var(--font-geist)')
     root.style.setProperty('--font-mono', 'var(--font-geist-mono)')
   }
 }

@@ -118,10 +118,13 @@ impl IntruderManager {
                     return Err(AppError::InvalidInput("no payloads provided".into()));
                 }
                 let mut out = Vec::with_capacity(total);
-                for i in 0..total {
+                let mut payload_iters = payload_sets.iter().map(|set| set.iter()).collect::<Vec<_>>();
+                for _ in 0..total {
                     let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-                    for (pos, m) in markers.iter().enumerate() {
-                        map.insert(m.clone(), payload_sets[pos][i].clone());
+                    for (m, payload_iter) in markers.iter().zip(payload_iters.iter_mut()) {
+                        if let Some(payload) = payload_iter.next() {
+                            map.insert(m.clone(), payload.clone());
+                        }
                     }
                     out.push(apply_payload_map(&template, &map));
                 }
@@ -226,7 +229,7 @@ impl IntruderManager {
                     _ = async {} => {}
                 }
 
-                let parsed = match parse_raw_http_request(&raw_req) {
+                let parsed = match parse_raw_http_request(raw_req) {
                     Ok(p) => p,
                     Err(e) => {
                         let id = Uuid::new_v4().to_string();
@@ -241,7 +244,7 @@ impl IntruderManager {
                                 None,
                                 None,
                                 Some(&e.to_string()),
-                                &raw_req,
+                                raw_req,
                                 None,
                             )
                             .await;
@@ -315,7 +318,7 @@ impl IntruderManager {
                         duration_ms,
                         size,
                         error.as_deref(),
-                        &raw_req,
+                        raw_req,
                         raw_resp.as_deref(),
                     )
                     .await;

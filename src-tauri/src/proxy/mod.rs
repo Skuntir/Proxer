@@ -1,6 +1,9 @@
 use std::{
     net::SocketAddr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -171,6 +174,8 @@ pub struct ProxyEngine {
     tls: Arc<TlsManager>,
     intercept: Arc<InterceptManager>,
     client: reqwest::Client,
+    insecure_client: reqwest::Client,
+    persisted_count: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -194,6 +199,12 @@ impl ProxyEngine {
             .no_proxy()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
+        let insecure_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap_or_else(|_| client.clone());
 
         Self {
             _app: app,
@@ -204,6 +215,8 @@ impl ProxyEngine {
             tls,
             intercept,
             client,
+            insecure_client,
+            persisted_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -244,6 +257,8 @@ impl ProxyEngine {
             tls: self.tls.clone(),
             intercept: self.intercept.clone(),
             client: self.client.clone(),
+            insecure_client: self.insecure_client.clone(),
+            persisted_count: self.persisted_count.clone(),
         }
     }
 
@@ -340,8 +355,9 @@ impl ProxyService {
             elapsed_ms: 0,
         };
 
-        let store = self.engine.store.get();
-        store.insert(&proxy_req, Some(&proxy_resp), None).await?;
+        self.engine
+            .persist_traffic(&proxy_req, Some(&proxy_resp), None)
+            .await?;
 
         self.engine.events.emit(BackendEvent::ResponseReceived {
             ts_ms: now_ms(),
@@ -375,8 +391,8 @@ impl ProxyService {
         let authority_clone = authority.clone();
         let on_upgrade = hyper::upgrade::on(req);
         tokio::task::spawn_local(async move {
-            match on_upgrade.await {
-                Ok(upgraded) => match acceptor.accept(TokioIo::new(upgraded)).await {
+            if let Ok(upgraded) = on_upgrade.await {
+                match acceptor.accept(TokioIo::new(upgraded)).await {
                     Ok(tls_stream) => {
                         engine.tls.emit_tls_handshake(host, "mitm".into(), true, None);
                         let _ = engine.serve_mitm_connection(tls_stream, authority_clone).await;
@@ -386,8 +402,7 @@ impl ProxyService {
                             .tls
                             .emit_tls_handshake(host, "mitm".into(), false, Some(e.to_string()));
                     }
-                },
-                Err(_) => {}
+                }
             }
         });
 
@@ -468,8 +483,9 @@ impl ProxyService {
                     }
                     InterceptDecision::Drop => {
                         let reason = "dropped by intercept".to_string();
-                        let store = self.engine.store.get();
-                        store.insert(&proxy_req, None, Some(&reason)).await?;
+                        self.engine
+                            .persist_traffic(&proxy_req, None, Some(&reason))
+                            .await?;
                         return Ok(Response::builder()
                             .status(StatusCode::FORBIDDEN)
                             .body(Full::new(Bytes::from(reason)))?);
@@ -483,8 +499,9 @@ impl ProxyService {
             tokio::time::sleep(Duration::from_millis(decision.delay_ms)).await;
         }
         if let Some(reason) = decision.blocked_reason {
-            let store = self.engine.store.get();
-            store.insert(&proxy_req, None, Some(&reason)).await?;
+            self.engine
+                .persist_traffic(&proxy_req, None, Some(&reason))
+                .await?;
             return Ok(Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Full::new(Bytes::from(reason)))?);
@@ -508,15 +525,17 @@ impl ProxyService {
                     elapsed_ms: proxy_resp.elapsed_ms,
                 });
 
-                let store = self.engine.store.get();
-                store.insert(&proxy_req, Some(&proxy_resp), None).await?;
+                self.engine
+                    .persist_traffic(&proxy_req, Some(&proxy_resp), None)
+                    .await?;
 
                 Ok(build_client_response(&proxy_resp)?)
             }
             Err(e) => {
                 let err = e.to_string();
-                let store = self.engine.store.get();
-                store.insert(&proxy_req, None, Some(&err)).await?;
+                self.engine
+                    .persist_traffic(&proxy_req, None, Some(&err))
+                    .await?;
                 let elapsed = started.elapsed().as_millis() as u64;
                 self.engine.events.emit(BackendEvent::ResponseReceived {
                     ts_ms: now_ms(),
@@ -541,7 +560,18 @@ impl ProxyEngine {
         let method = reqwest::Method::from_bytes(req.method.as_bytes())
             .map_err(|_| AppError::InvalidInput(format!("unsupported method {}", req.method)))?;
 
-        let mut builder = self.client.request(method, &req.url).body(req.body.clone());
+        let settings = self.settings.get().await.unwrap_or_default();
+        let timeout_secs = settings.request_timeout_seconds.clamp(1, 300) as u64;
+        let client = if settings.verify_certificates {
+            &self.client
+        } else {
+            &self.insecure_client
+        };
+
+        let mut builder = client
+            .request(method, &req.url)
+            .timeout(Duration::from_secs(timeout_secs))
+            .body(req.body.clone());
 
         for h in &req.headers {
             if is_hop_header(&h.name) {
@@ -598,8 +628,7 @@ impl ProxyEngine {
             tokio::time::sleep(Duration::from_millis(decision.delay_ms)).await;
         }
         if let Some(reason) = decision.blocked_reason {
-            let store = self.store.get();
-            store.insert(&original, None, Some(&reason)).await?;
+            self.persist_traffic(&original, None, Some(&reason)).await?;
             return Ok(original.id);
         }
 
@@ -617,9 +646,30 @@ impl ProxyEngine {
             elapsed_ms: resp.elapsed_ms,
         });
 
-        let store = self.store.get();
-        store.insert(&original, Some(&resp), None).await?;
+        self.persist_traffic(&original, Some(&resp), None).await?;
         Ok(original.id)
+    }
+
+    async fn persist_traffic(
+        &self,
+        req: &ProxyRequest,
+        resp: Option<&ProxyResponse>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let store = self.store.get();
+        store.insert(req, resp, error).await?;
+        let count = self.persisted_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if !count.is_multiple_of(100) {
+            return Ok(());
+        }
+        let max_rows = self
+            .settings
+            .get()
+            .await
+            .map(|s| s.max_history_items.clamp(100, 100_000))
+            .unwrap_or(10_000);
+        store.prune_traffic(max_rows).await?;
+        Ok(())
     }
 }
 

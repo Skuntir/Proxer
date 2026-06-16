@@ -62,6 +62,27 @@ pub async fn project_open(state: State<'_, AppState>, path: String) -> Result<Pr
     project_status(state).await
 }
 
+#[tauri::command]
+pub async fn project_open_folder_dialog(state: State<'_, AppState>) -> Result<Option<ProjectStatus>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Select a project folder")
+            .pick_folder()
+    })
+    .await
+    .map_err(|e| format!("folder picker failed: {e}"))?;
+
+    let Some(folder) = picked else {
+        return Ok(None);
+    };
+
+    state
+        .open_project(folder.join("proxer.db"))
+        .await
+        .map_err(String::from)?;
+    project_status(state).await.map(Some)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepeaterSendResult {
@@ -117,7 +138,7 @@ pub async fn events_poll(
 #[tauri::command]
 pub async fn app_info() -> Result<AppInfo, String> {
     Ok(AppInfo {
-        name: "Skuntir".into(),
+        name: "Proxer".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     })
 }
@@ -181,8 +202,8 @@ pub async fn dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStat
 }
 
 #[tauri::command]
-pub async fn dashboard_details(state: State<'_, AppState>) -> Result<DashboardDetails, String> {
-    compute_dashboard_details(state.store.get())
+pub async fn dashboard_details(state: State<'_, AppState>, range: Option<String>) -> Result<DashboardDetails, String> {
+    compute_dashboard_details(state.store.get(), range.as_deref())
         .await
         .map_err(String::from)
 }
@@ -230,7 +251,7 @@ pub async fn config_import(state: State<'_, AppState>, json: String) -> Result<(
     let patch = serde_json::to_value(&parsed.settings).map_err(|e| e.to_string())?;
     let _ = state.settings.set_patch(patch).await.map_err(String::from)?;
 
-    let _ = state.tls.set_mitm_enabled(parsed.mitm_enabled).await.map_err(String::from)?;
+    state.tls.set_mitm_enabled(parsed.mitm_enabled).await.map_err(String::from)?;
     state.intercept.set_enabled(parsed.intercept_enabled).await;
 
     for r in parsed.rules {
@@ -380,6 +401,9 @@ pub async fn proxy_status(state: State<'_, AppState>) -> Result<ProxyStatus, Str
 
 #[tauri::command]
 pub async fn tls_set_mitm_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    if enabled && state.tls.ca_info().await.is_none() {
+        let _ = state.tls.generate_ca().await.map_err(String::from)?;
+    }
     state.tls.set_mitm_enabled(enabled).await.map_err(String::from)?;
     let _ = state
         .logs
@@ -416,11 +440,11 @@ pub async fn tls_export_ca_der_base64(state: State<'_, AppState>) -> Result<Stri
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
-fn downloads_skuntir_dir(state: &AppState) -> Result<PathBuf, String> {
+fn downloads_proxer_dir(state: &AppState) -> Result<PathBuf, String> {
     state
         .app
         .path()
-        .resolve("Skuntir", BaseDirectory::Download)
+        .resolve("Proxer", BaseDirectory::Download)
         .map_err(|e| e.to_string())
 }
 
@@ -443,12 +467,12 @@ pub async fn tls_export_ca_to_downloads(state: State<'_, AppState>) -> Result<Ex
     let pem = state.tls.export_ca_pem().await.map_err(String::from)?;
     let der = state.tls.export_ca_der().await.map_err(String::from)?;
 
-    let dir = downloads_skuntir_dir(&state)?;
+    let dir = downloads_proxer_dir(&state)?;
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
 
     let ts = crate::events::now_ms();
-    let pem_path = dir.join(format!("skuntir-ca-{ts}.pem"));
-    let cer_path = dir.join(format!("skuntir-ca-{ts}.cer"));
+    let pem_path = dir.join(format!("proxer-ca-{ts}.pem"));
+    let cer_path = dir.join(format!("proxer-ca-{ts}.cer"));
 
     tokio::fs::write(&pem_path, pem.as_bytes()).await.map_err(|e| e.to_string())?;
     tokio::fs::write(&cer_path, &der).await.map_err(|e| e.to_string())?;
@@ -475,7 +499,7 @@ pub async fn tls_export_ca_to_downloads(state: State<'_, AppState>) -> Result<Ex
 #[tauri::command]
 pub async fn downloads_write_text(state: State<'_, AppState>, filename: String, contents: String) -> Result<ExportedTextFile, String> {
     validate_download_filename(&filename)?;
-    let dir = downloads_skuntir_dir(&state)?;
+    let dir = downloads_proxer_dir(&state)?;
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let path = dir.join(filename);
     tokio::fs::write(&path, contents.as_bytes()).await.map_err(|e| e.to_string())?;
@@ -668,6 +692,7 @@ pub async fn rules_remove(state: State<'_, AppState>, id: String) -> Result<bool
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub async fn repeater_send_raw(raw_request: Option<String>, rawRequest: Option<String>) -> Result<RepeaterSendResult, String> {
     let raw = raw_request
         .or(rawRequest)

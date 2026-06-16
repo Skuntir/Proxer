@@ -41,7 +41,6 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_state = tauri::async_runtime::block_on(AppState::new(app.handle().clone()))?;
             app.manage(app_state);
@@ -57,6 +56,7 @@ fn main() {
             commands::project_status,
             commands::project_use_temporary,
             commands::project_open,
+            commands::project_open_folder_dialog,
             commands::events_poll,
             commands::proxy_start,
             commands::proxy_stop,

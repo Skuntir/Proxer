@@ -1226,6 +1226,104 @@
   --surface-elevated: #121020;
 }
 
+:root.palette-amoled-red {
+  --background: #fffafa;
+  --foreground: #180809;
+  --card: #ffffff;
+  --card-foreground: #180809;
+  --popover: #ffffff;
+  --popover-foreground: #180809;
+  --primary: #dc2626;
+  --primary-foreground: #ffffff;
+  --secondary: #fee2e2;
+  --secondary-foreground: #3f0a0a;
+  --muted: #fff1f1;
+  --muted-foreground: #7f3a3a;
+  --accent: #fecaca;
+  --accent-foreground: #3f0a0a;
+  --destructive: #b91c1c;
+  --destructive-foreground: #ffffff;
+  --border: #ffd7d7;
+  --input: #ffe4e4;
+  --ring: #ef4444;
+  --chart-1: #dc2626;
+  --chart-2: #991b1b;
+  --chart-3: #f87171;
+  --chart-4: #7f1d1d;
+  --chart-5: #fb7185;
+  --sidebar: #fff5f5;
+  --sidebar-foreground: #180809;
+  --sidebar-primary: #dc2626;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #fee2e2;
+  --sidebar-accent-foreground: #3f0a0a;
+  --sidebar-border: #ffd7d7;
+  --sidebar-ring: #ef4444;
+  --surface: #fffafa;
+  --surface-elevated: #ffffff;
+
+  --method-get: #b91c1c;
+  --method-post: #dc2626;
+  --method-put: #ef4444;
+  --method-patch: #f87171;
+  --method-delete: #991b1b;
+  --method-options: #7f3a3a;
+  --method-head: #7f3a3a;
+  --status-success: #b91c1c;
+  --status-redirect: #dc2626;
+  --status-client-error: #ef4444;
+  --status-server-error: #991b1b;
+}
+
+.dark.palette-amoled-red {
+  --background: #000000;
+  --foreground: #f8fafc;
+  --card: #030303;
+  --card-foreground: #f8fafc;
+  --popover: #050505;
+  --popover-foreground: #f8fafc;
+  --primary: #ff1f2d;
+  --primary-foreground: #000000;
+  --secondary: #130405;
+  --secondary-foreground: #f5f5f5;
+  --muted: #0b0b0b;
+  --muted-foreground: #a3a3a3;
+  --accent: #260607;
+  --accent-foreground: #ffffff;
+  --destructive: #ff3344;
+  --destructive-foreground: #000000;
+  --border: #241112;
+  --input: #100708;
+  --ring: #ff1f2d;
+  --chart-1: #ff1f2d;
+  --chart-2: #ff4d57;
+  --chart-3: #ffffff;
+  --chart-4: #b00012;
+  --chart-5: #ff8a92;
+  --sidebar: #000000;
+  --sidebar-foreground: #f8fafc;
+  --sidebar-primary: #ff1f2d;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: #130405;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #1c0a0b;
+  --sidebar-ring: #ff1f2d;
+  --surface: #000000;
+  --surface-elevated: #050505;
+
+  --method-get: #ffffff;
+  --method-post: #ff1f2d;
+  --method-put: #ff5a64;
+  --method-patch: #ff8a92;
+  --method-delete: #ff3344;
+  --method-options: #a3a3a3;
+  --method-head: #a3a3a3;
+  --status-success: #ffffff;
+  --status-redirect: #ff1f2d;
+  --status-client-error: #ff5a64;
+  --status-server-error: #ff3344;
+}
+
 :root.tone-gray {
   --destructive: oklch(0.35 0 0);
   --destructive-foreground: oklch(0.98 0 0);
@@ -1351,7 +1449,19 @@
   line-height: 1.5;
 }
 
+.fast-scroll {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+  will-change: scroll-position;
+}
+
+.overflow-auto,
+.overflow-y-auto {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
 
 ::-webkit-scrollbar {
-display: none;
+  display: none;
 }

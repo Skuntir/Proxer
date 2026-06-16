@@ -100,6 +100,7 @@ impl ExtensionManager {
     pub async fn install(&self, id: &str) -> Result<()> {
         let store = self.store.get();
         store.extensions_set_installed(id, true).await?;
+        store.extensions_set_enabled(id, true).await?;
         self.events.emit(BackendEvent::ExtensionInstalled {
             ts_ms: crate::events::now_ms(),
             id: id.to_string(),
@@ -118,4 +119,3 @@ impl ExtensionManager {
         Ok(())
     }
 }
-

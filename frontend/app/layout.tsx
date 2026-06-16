@@ -11,7 +11,7 @@ const firaCode = Fira_Code({ subsets: ['latin'], variable: '--font-fira-code' })
 const sourceCodePro = Source_Code_Pro({ subsets: ['latin'], variable: '--font-source-code-pro' })
 
 export const metadata: Metadata = {
-  title: 'Skuntir - Web Security Proxy',
+  title: 'Proxer - Web Security Proxy',
   description: 'Web security testing and proxy analysis tool',
   generator: 'v0.app',
   icons: {
@@ -32,7 +32,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geist.variable} ${geistMono.variable} ${jetbrainsMono.variable} ${firaCode.variable} ${sourceCodePro.variable} bg-background`}
+      className={`${geist.variable} ${geistMono.variable} ${jetbrainsMono.variable} ${firaCode.variable} ${sourceCodePro.variable} dark palette-amoled-red bg-background`}
     >
       <body className="font-sans antialiased overflow-hidden">
         {children}

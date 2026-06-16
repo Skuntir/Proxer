@@ -14,16 +14,20 @@ pnpm-debug.log*
 
 .vscode/
 .idea/
+.zed/
 
 node_modules/
 
 .next/
 out/
 .turbo/
+.vercel/
 
 dist/
 build/
 coverage/
+playwright-report/
+test-results/
 
 *.tsbuildinfo
 
@@ -38,3 +42,12 @@ src-tauri/.tauri/
 *.sqlite
 *.sqlite3
 
+*.tmp
+*.temp
+*.bak
+*.swp
+
+*.pem
+*.key
+*.p12
+*.pfx

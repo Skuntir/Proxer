@@ -46,7 +46,7 @@ fn default_show_examples() -> bool {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
-            theme: "system".into(),
+            theme: "dark-color-amoled-red".into(),
             font_size: 12,
             font_family: "mono".into(),
             compact_mode: false,

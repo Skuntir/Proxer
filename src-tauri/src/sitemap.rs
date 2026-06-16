@@ -39,7 +39,17 @@ pub async fn build_sitemap(store: Arc<SqliteStore>, limit: u32) -> Result<Vec<Ui
             .unwrap_or_else(|| "/".to_string());
 
         let entry = hosts.entry(host.clone()).or_insert_with(|| HostNode::new(&host));
-        entry.insert_endpoint(&path, &method, &url, count, &last_id, last_started_ms, last_status);
+        entry.insert_endpoint(
+            &path,
+            EndpointInfo {
+                method: &method,
+                url: &url,
+                count,
+                last_id: &last_id,
+                last_started_ms,
+                last_status,
+            },
+        );
     }
 
     Ok(hosts.into_values().map(|h| h.into_ui()).collect())
@@ -51,6 +61,16 @@ struct HostNode {
     endpoints: Vec<UiSitemapNode>,
 }
 
+#[derive(Clone, Copy)]
+struct EndpointInfo<'a> {
+    method: &'a str,
+    url: &'a str,
+    count: i64,
+    last_id: &'a str,
+    last_started_ms: i64,
+    last_status: Option<i64>,
+}
+
 impl HostNode {
     fn new(host: &str) -> Self {
         Self {
@@ -60,28 +80,14 @@ impl HostNode {
         }
     }
 
-    fn insert_endpoint(
-        &mut self,
-        path: &str,
-        method: &str,
-        url: &str,
-        count: i64,
-        last_id: &str,
-        last_started_ms: i64,
-        last_status: Option<i64>,
-    ) {
+    fn insert_endpoint(&mut self, path: &str, info: EndpointInfo<'_>) {
         let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         if parts.is_empty() {
             self.endpoints
                 .push(endpoint_node(
                     &format!("{}/", self.host),
                     "/",
-                    method,
-                    url,
-                    count,
-                    last_id,
-                    last_started_ms,
-                    last_status,
+                    info,
                 ));
             return;
         }
@@ -105,26 +111,16 @@ impl HostNode {
             Some(node) => node
                 .endpoints
                 .push(endpoint_node(
-                    &format!("{}:{}:{}", self.host, path, method),
+                    &format!("{}:{}:{}", self.host, path, info.method),
                     last,
-                    method,
-                    url,
-                    count,
-                    last_id,
-                    last_started_ms,
-                    last_status,
+                    info,
                 )),
             None => self
                 .endpoints
                 .push(endpoint_node(
-                    &format!("{}:{}:{}", self.host, path, method),
+                    &format!("{}:{}:{}", self.host, path, info.method),
                     last,
-                    method,
-                    url,
-                    count,
-                    last_id,
-                    last_started_ms,
-                    last_status,
+                    info,
                 )),
         }
     }
@@ -188,26 +184,17 @@ impl FolderNode {
     }
 }
 
-fn endpoint_node(
-    id: &str,
-    name: &str,
-    method: &str,
-    url: &str,
-    count: i64,
-    last_id: &str,
-    last_started_ms: i64,
-    last_status: Option<i64>,
-) -> UiSitemapNode {
+fn endpoint_node(id: &str, name: &str, info: EndpointInfo<'_>) -> UiSitemapNode {
     UiSitemapNode {
         id: id.to_string(),
         name: name.to_string(),
         node_type: "endpoint".into(),
-        method: Some(method.to_string()),
-        url: Some(url.to_string()),
-        last_id: Some(last_id.to_string()),
-        last_started_ms: Some(last_started_ms),
-        last_status,
+        method: Some(info.method.to_string()),
+        url: Some(info.url.to_string()),
+        last_id: Some(info.last_id.to_string()),
+        last_started_ms: Some(info.last_started_ms),
+        last_status: info.last_status,
         children: None,
-        request_count: Some(count),
+        request_count: Some(info.count),
     }
 }

@@ -23,6 +23,7 @@ import { Switch } from '@/components/ui/switch'
 import { Progress } from '@/components/ui/progress'
 import { applyTheme } from '@/lib/theme'
 import { applyTypography } from '@/lib/typography'
+import { checkForUpdates } from '@/lib/update-check'
 import { buildLineDiff, type DiffRow } from '@/lib/diff'
 import { cn } from '@/lib/utils'
 import { uiInfo, uiPrompt, uiToastError, uiToastSuccess, uiTwoField } from '@/lib/overlays'
@@ -82,25 +83,43 @@ import {
   type Vulnerability,
 } from '@/lib/proxer'
 
-const chartData = [45, 62, 78, 55, 89, 72, 95, 68, 82, 91, 76, 63, 88, 74, 69, 85, 92, 77, 64, 71, 86, 79, 93, 81]
-
 export function DashboardView() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [details, setDetails] = useState<DashboardDetails | null>(null)
+  const [activityRange, setActivityRange] = useState('24h')
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null)
   const [recentFindings, setRecentFindings] = useState<Vulnerability[]>([])
+  const reloadTimerRef = useRef<number | null>(null)
+  const reloadInFlightRef = useRef(false)
+  const activityRangeRef = useRef('24h')
 
   const reload = async () => {
-    const [ds, dd, ss, findings] = await Promise.all([
-      dashboardStats(),
-      dashboardDetails(),
-      scannerStatus(),
-      scannerFindingsList(undefined, 10, 0),
-    ])
-    setStats(ds)
-    setDetails(dd)
-    setScanStatus(ss)
-    setRecentFindings(findings.slice(0, 4))
+    if (reloadInFlightRef.current) return
+    reloadInFlightRef.current = true
+    try {
+      const [ds, dd, ss, findings] = await Promise.all([
+        dashboardStats(),
+        dashboardDetails(activityRangeRef.current),
+        scannerStatus(),
+        scannerFindingsList(undefined, 10, 0),
+      ])
+      setStats(ds)
+      setDetails(dd)
+      setScanStatus(ss)
+      setRecentFindings(findings.slice(0, 4))
+    } finally {
+      reloadInFlightRef.current = false
+    }
+  }
+
+  const scheduleReload = () => {
+    if (reloadTimerRef.current) return
+    reloadTimerRef.current = window.setTimeout(() => {
+      reloadTimerRef.current = null
+      reload().catch(() => {
+        reloadInFlightRef.current = false
+      })
+    }, 1000)
   }
 
   useEffect(() => {
@@ -109,15 +128,16 @@ export function DashboardView() {
     const onCleared = () => reload().catch(() => {})
     onBackendEvent((ev) => {
       if (ev.type === 'RequestCaptured' || ev.type === 'ResponseReceived') {
-        reload().catch(() => {})
+        scheduleReload()
       }
       if (ev.type === 'ScanFinding' || ev.type === 'ScanProgress' || ev.type === 'ScanCompleted') {
-        reload().catch(() => {})
+        scheduleReload()
       }
     }).then((u) => (unlisten = u))
     window.addEventListener('skuntir:traffic-cleared', onCleared)
     return () => {
       unlisten?.()
+      if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current)
       window.removeEventListener('skuntir:traffic-cleared', onCleared)
     }
   }, [])
@@ -202,6 +222,25 @@ export function DashboardView() {
     return items.map((i) => ({ ...i, percentage: Math.round((i.requests / max) * 100) }))
   }, [details])
 
+  const activityItems = useMemo(() => {
+    const items = details?.activity ?? []
+    const max = Math.max(1, ...items.map((i) => i.requests))
+    return items.map((item) => ({
+      ...item,
+      height: item.requests > 0 ? Math.max(6, Math.round((item.requests / max) * 100)) : 0,
+      label:
+        activityRange === '1h' || activityRange === '24h'
+          ? new Date(item.bucketMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : new Date(item.bucketMs).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+    }))
+  }, [activityRange, details])
+
+  const activityAxisLabels = useMemo(() => {
+    if (activityItems.length === 0) return ['-', '-', '-', '-', '-']
+    const last = activityItems.length - 1
+    return [0, 0.25, 0.5, 0.75, 1].map((p) => activityItems[Math.round(last * p)]?.label ?? '-')
+  }, [activityItems])
+
   return (
     <div className="p-6 space-y-6 bg-background h-full overflow-auto">
       <div className="flex items-center justify-between">
@@ -228,7 +267,7 @@ export function DashboardView() {
                 details,
                 recentFindings,
               }
-              downloadsWriteText(`skuntir-report-${Date.now()}.json`, JSON.stringify(report, null, 2))
+              downloadsWriteText(`proxer-report-${Date.now()}.json`, JSON.stringify(report, null, 2))
                 .then((r) => uiToastSuccess('Report exported', r.path))
                 .catch(() => {})
             }}
@@ -273,7 +312,14 @@ export function DashboardView() {
         <Card className="col-span-2 p-4 bg-card border-border">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-foreground">Request Activity</h3>
-            <Select defaultValue="24h">
+            <Select
+              value={activityRange}
+              onValueChange={(value) => {
+                activityRangeRef.current = value
+                setActivityRange(value)
+                reload().catch(() => {})
+              }}
+            >
               <SelectTrigger className="w-32 h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
@@ -286,21 +332,22 @@ export function DashboardView() {
             </Select>
           </div>
           <div className="h-48 flex items-end justify-between gap-1 px-4 border-b border-border">
-            {chartData.map((height, i) => (
-              <div 
-                key={i} 
-                className="flex-1 bg-primary/20 hover:bg-primary/40 rounded-t transition-colors cursor-pointer"
-                style={{ height: `${height}%` }}
-                title={`${height} requests`}
+            {activityItems.map((item) => (
+              <div
+                key={item.bucketMs}
+                className={cn(
+                  'flex-1 rounded-t transition-colors',
+                  item.requests > 0 ? 'bg-primary/35 hover:bg-primary/60 cursor-pointer' : 'bg-muted/30'
+                )}
+                style={{ height: `${item.height}%` }}
+                title={`${item.label}: ${item.requests} request${item.requests === 1 ? '' : 's'}`}
               />
             ))}
           </div>
           <div className="flex justify-between px-4 mt-2 text-[10px] text-muted-foreground">
-            <span>00:00</span>
-            <span>06:00</span>
-            <span>12:00</span>
-            <span>18:00</span>
-            <span>24:00</span>
+            {activityAxisLabels.map((label, index) => (
+              <span key={`${label}-${index}`}>{label}</span>
+            ))}
           </div>
         </Card>
 
@@ -441,16 +488,34 @@ export function TargetView() {
   const textFilterRef = useRef<HTMLInputElement | null>(null)
   const [lastCapture, setLastCapture] = useState<HttpRequest | null>(null)
   const [visualClearAfterMs, setVisualClearAfterMs] = useState<number | null>(null)
+  const reloadTimerRef = useRef<number | null>(null)
+  const reloadInFlightRef = useRef(false)
 
   const reload = async () => {
-    const n = await sitemapGet(2000)
-    setNodes(n)
-    if (n.length > 0) {
-      setExpandedNodes((prev) => {
-        if (prev.size > 0) return prev
-        return new Set([n[0].id])
-      })
+    if (reloadInFlightRef.current) return
+    reloadInFlightRef.current = true
+    try {
+      const n = await sitemapGet(2000)
+      setNodes(n)
+      if (n.length > 0) {
+        setExpandedNodes((prev) => {
+          if (prev.size > 0) return prev
+          return new Set([n[0].id])
+        })
+      }
+    } finally {
+      reloadInFlightRef.current = false
     }
+  }
+
+  const scheduleReload = () => {
+    if (reloadTimerRef.current) return
+    reloadTimerRef.current = window.setTimeout(() => {
+      reloadTimerRef.current = null
+      reload().catch(() => {
+        reloadInFlightRef.current = false
+      })
+    }, 1000)
   }
 
   useEffect(() => {
@@ -473,13 +538,14 @@ export function TargetView() {
     }
     onBackendEvent((ev) => {
       if (ev.type === 'RequestCaptured' || ev.type === 'ResponseReceived') {
-        reload().catch(() => {})
+        scheduleReload()
       }
     }).then((u) => (unlisten = u))
     window.addEventListener('skuntir:traffic-cleared', onCleared)
     window.addEventListener('skuntir:visual-clear', onVisualClear)
     return () => {
       unlisten?.()
+      if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current)
       window.removeEventListener('skuntir:traffic-cleared', onCleared)
       window.removeEventListener('skuntir:visual-clear', onVisualClear)
     }
@@ -942,12 +1008,16 @@ export function ProxyView({
     reload().catch(() => {})
     let unlisten: (() => void) | null = null
     onBackendEvent((ev) => {
-      if (ev.type === 'ProxyStatusChanged' || ev.type === 'RequestCaptured' || ev.type === 'ResponseReceived') {
+      if (ev.type === 'ProxyStatusChanged') {
         reload().catch(() => {})
       }
     }).then((u) => (unlisten = u))
+    const interval = window.setInterval(() => {
+      dashboardStats().then(setStats).catch(() => {})
+    }, 3000)
     return () => {
       unlisten?.()
+      window.clearInterval(interval)
     }
   }, [])
 
@@ -978,7 +1048,7 @@ export function ProxyView({
             onClick={() => {
               configExport()
                 .then((json) => {
-                  return downloadsWriteText(`skuntir-config-${Date.now()}.json`, json)
+                  return downloadsWriteText(`proxer-config-${Date.now()}.json`, json)
                 })
                 .then((r) => {
                   uiToastSuccess('Config exported', r.path)
@@ -1120,6 +1190,7 @@ export function ProxyView({
               <Switch
                 checked={mitmEnabled}
                 onCheckedChange={(enabled) => {
+                  setMitmEnabled(enabled)
                   ;(async () => {
                     if (enabled) {
                       if (!(await tlsCaInfo())) {
@@ -1130,7 +1201,10 @@ export function ProxyView({
                       await tlsSetMitmEnabled(false)
                     }
                     setMitmEnabled(await tlsGetMitmEnabled())
-                  })().catch(() => {})
+                  })().catch((e) => {
+                    setMitmEnabled(false)
+                    uiToastError('Could not update SSL interception', String(e))
+                  })
                 }}
               />
             </div>
@@ -1388,7 +1462,7 @@ export function ProxyView({
                   name: 'New rule',
                   enabled: true,
                   matcher: { method: null, urlContains: null, headerEquals: [], statusCode: null },
-                  actions: [{ type: 'SetHeader', data: { name: 'User-Agent', value: 'Skuntir' } }],
+                  actions: [{ type: 'SetHeader', data: { name: 'User-Agent', value: 'Proxer' } }],
                 }
                 uiPrompt({
                   title: 'New rule JSON',
@@ -1493,7 +1567,7 @@ export function ScannerView() {
                 scanStatus: scanStatusState,
                 findings: vulns,
               }
-              downloadsWriteText(`skuntir-scan-report-${Date.now()}.json`, JSON.stringify(report, null, 2))
+              downloadsWriteText(`proxer-scan-report-${Date.now()}.json`, JSON.stringify(report, null, 2))
                 .then((r) => uiToastSuccess('Scan report exported', r.path))
                 .catch(() => {})
             }}
@@ -2132,9 +2206,16 @@ export function DecoderView() {
   const [input, setInput] = useState('Hello, World!')
   const [output, setOutput] = useState('')
   const [operation, setOperation] = useState('base64-encode')
+  const [decoderPackEnabled, setDecoderPackEnabled] = useState(false)
 
-  const handleOperation = () => {
-    switch (operation) {
+  useEffect(() => {
+    extensionsList(true)
+      .then((items) => setDecoderPackEnabled(items.some((e) => e.id === 'ext.decoder' && e.enabled)))
+      .catch(() => setDecoderPackEnabled(false))
+  }, [])
+
+  const handleOperation = (selectedOperation = operation) => {
+    switch (selectedOperation) {
       case 'base64-encode':
         setOutput(btoa(input))
         break
@@ -2152,6 +2233,32 @@ export function DecoderView() {
         break
       case 'hex-encode':
         setOutput(Array.from(input).map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(' '))
+        break
+      case 'rot13':
+        setOutput(input.replace(/[a-zA-Z]/g, (c) => {
+          const base = c <= 'Z' ? 65 : 97
+          return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base)
+        }))
+        break
+      case 'json-pretty':
+        try { setOutput(JSON.stringify(JSON.parse(input), null, 2)) } catch { setOutput('Invalid JSON') }
+        break
+      case 'jwt-decode':
+        try {
+          const parts = input.trim().split('.')
+          if (parts.length < 2) throw new Error('Invalid JWT')
+          const decodePart = (part: string) => {
+            const normalized = part.replace(/-/g, '+').replace(/_/g, '/')
+            const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+            return JSON.parse(atob(padded))
+          }
+          setOutput(JSON.stringify({ header: decodePart(parts[0]), payload: decodePart(parts[1]) }, null, 2))
+        } catch {
+          setOutput('Invalid JWT')
+        }
+        break
+      case 'unicode-escape':
+        setOutput(Array.from(input).map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join(''))
         break
       default:
         setOutput(input)
@@ -2215,6 +2322,14 @@ export function DecoderView() {
             { id: 'url-decode', label: 'URL Decode' },
             { id: 'html-encode', label: 'HTML Encode' },
             { id: 'hex-encode', label: 'Hex Encode' },
+            ...(decoderPackEnabled
+              ? [
+                  { id: 'rot13', label: 'ROT13' },
+                  { id: 'json-pretty', label: 'JSON Pretty' },
+                  { id: 'jwt-decode', label: 'JWT Decode' },
+                  { id: 'unicode-escape', label: 'Unicode Escape' },
+                ]
+              : []),
           ].map((op) => (
             <Button
               key={op.id}
@@ -2222,7 +2337,7 @@ export function DecoderView() {
               size="sm"
               onClick={() => {
                 setOperation(op.id)
-                handleOperation()
+                handleOperation(op.id)
               }}
             >
               {op.label}
@@ -2230,7 +2345,7 @@ export function DecoderView() {
           ))}
         </div>
         <div className="flex gap-2 mt-4">
-          <Button onClick={handleOperation}>
+          <Button onClick={() => handleOperation()}>
             <ArrowRightLeft className="w-4 h-4 mr-2" />
             Apply Operation
           </Button>
@@ -2618,7 +2733,7 @@ export function LoggerView() {
             size="sm"
             onClick={() => {
               const text = filteredLogs.map((l) => `${l.timestamp} [${l.level}] [${l.source}] ${l.message}`).join('\n')
-              downloadsWriteText(`skuntir-logs-${Date.now()}.txt`, text)
+              downloadsWriteText(`proxer-logs-${Date.now()}.txt`, text)
                 .then((r) => uiToastSuccess('Logs exported', r.path))
                 .catch(() => {})
             }}
@@ -2705,6 +2820,62 @@ export function ExtensionsView() {
     )
   }, [availableExts, searchText])
 
+  const buildExtensionReport = async () => {
+    const [stats, details, findings, logs] = await Promise.all([
+      dashboardStats(),
+      dashboardDetails('24h'),
+      scannerFindingsList(undefined, 500, 0),
+      logsList(undefined, 500, 0),
+    ])
+    const report = {
+      generatedAt: new Date().toISOString(),
+      stats,
+      responseCodes: details.responseCodes,
+      topHosts: details.topHosts,
+      activity: details.activity,
+      findings,
+      logs,
+    }
+    const result = await downloadsWriteText(`proxer-report-${Date.now()}.json`, JSON.stringify(report, null, 2))
+    uiToastSuccess('Report built', result.path)
+  }
+
+  const extensionAction = (ext: Extension) => {
+    if (!ext.enabled) return null
+    if (ext.id === 'ext.decoder') {
+      return { label: 'Open Decoder', run: () => appNavigate('decoder') }
+    }
+    if (ext.id === 'ext.passive-scanner') {
+      return {
+        label: 'Run Scan',
+        run: () => {
+          scannerStart(5000)
+            .then(() => {
+              uiToastSuccess('Passive scan started', 'Passive Scanner+ checks are enabled.')
+              appNavigate('scanner')
+            })
+            .catch((e) => uiToastError('Could not start scan', String(e)))
+        },
+      }
+    }
+    if (ext.id === 'ext.reporter') {
+      return {
+        label: 'Build Report',
+        run: () => buildExtensionReport().catch((e) => uiToastError('Report failed', String(e))),
+      }
+    }
+    if (ext.id === 'ext.traffic-tags') {
+      return {
+        label: 'Tag Traffic',
+        run: () => {
+          uiToastSuccess('Traffic Tagger enabled', 'Open a request in History and use the Tags tab.')
+          appNavigate('history')
+        },
+      }
+    }
+    return null
+  }
+
   return (
     <div className="p-6 space-y-6 bg-background h-full overflow-auto">
       <div className="flex items-center justify-between">
@@ -2759,6 +2930,15 @@ export function ExtensionsView() {
                           .catch(() => {})
                       }}
                     />
+                    {extensionAction(ext) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => extensionAction(ext)?.run()}
+                      >
+                        {extensionAction(ext)?.label}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </Card>
@@ -2807,8 +2987,11 @@ export function ExtensionsView() {
                     className="ml-4"
                     onClick={() => {
                       extensionsInstall(ext.id)
-                        .then(() => reload())
-                        .catch(() => {})
+                        .then(() => {
+                          uiToastSuccess('Extension installed', `${ext.name} is enabled.`)
+                          return reload()
+                        })
+                        .catch((e) => uiToastError('Install failed', String(e)))
                     }}
                   >
                     Install
@@ -2832,9 +3015,9 @@ export function SettingsView() {
     settingsGet()
       .then((s) => {
         setSettingsState(s)
-        applyTheme(s.theme ?? 'system')
+        applyTheme(s.theme ?? 'dark-color-amoled-red')
         applyTypography(s)
-        window.dispatchEvent(new CustomEvent('proxer:theme', { detail: { theme: s.theme ?? 'system' } }))
+        window.dispatchEvent(new CustomEvent('proxer:theme', { detail: { theme: s.theme ?? 'dark-color-amoled-red' } }))
       })
       .catch(() => {})
     appInfo().then(setInfo).catch(() => {})
@@ -2866,9 +3049,9 @@ export function SettingsView() {
     settingsSet(patch)
       .then((s) => {
         setSettingsState(s)
-        applyTheme(s.theme ?? 'system')
+        applyTheme(s.theme ?? 'dark-color-amoled-red')
         applyTypography(s)
-        window.dispatchEvent(new CustomEvent('proxer:theme', { detail: { theme: s.theme ?? 'system' } }))
+        window.dispatchEvent(new CustomEvent('proxer:theme', { detail: { theme: s.theme ?? 'dark-color-amoled-red' } }))
         window.dispatchEvent(
           new CustomEvent('skuntir:settings-updated', {
             detail: {
@@ -2876,6 +3059,7 @@ export function SettingsView() {
               fontFamily: s.fontFamily,
               showConnectTunnels: Boolean(s.showConnectTunnels),
               showExamples: s.showExamples !== false,
+              maxHistoryItems: s.maxHistoryItems,
             },
           })
         )
@@ -2884,7 +3068,7 @@ export function SettingsView() {
   }
 
   const parseTheme = (v: string | null | undefined) => {
-    const raw = (v || 'system').toString()
+    const raw = (v || 'dark-color-amoled-red').toString()
     const lower = raw.toLowerCase()
     const mode =
       lower === 'dark' || lower.startsWith('dark-')
@@ -2977,6 +3161,7 @@ export function SettingsView() {
                         <SelectItem value="night-owl">Night Owl</SelectItem>
                         <SelectItem value="papercolor">PaperColor</SelectItem>
                         <SelectItem value="vesper">Vesper</SelectItem>
+                        <SelectItem value="amoled-red">AMOLED Red</SelectItem>
                       </SelectContent>
                     </Select>
 
@@ -3023,10 +3208,11 @@ export function SettingsView() {
                     <p className="text-xs text-muted-foreground">Editor font</p>
                   </div>
                   <Select value={settings?.fontFamily ?? 'mono'} onValueChange={(v) => update({ fontFamily: v })}>
-                    <SelectTrigger className="w-28 h-9">
+                    <SelectTrigger className="w-40 h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="system">Geist</SelectItem>
                       <SelectItem value="mono">JetBrains Mono</SelectItem>
                       <SelectItem value="fira">Fira Code</SelectItem>
                       <SelectItem value="source">Source Code Pro</SelectItem>
@@ -3063,7 +3249,7 @@ export function SettingsView() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Save Location</label>
-                  <Input value="AppData/skuntir" className="mt-1.5 h-9" readOnly />
+                  <Input value="AppData/proxer" className="mt-1.5 h-9" readOnly />
                 </div>
                 <div className="flex items-center justify-between">
                   <div>
@@ -3080,7 +3266,7 @@ export function SettingsView() {
                     onClick={() => {
                       configExport()
                         .then((json) => {
-                          return downloadsWriteText(`skuntir-project-${Date.now()}.json`, json)
+                          return downloadsWriteText(`proxer-project-${Date.now()}.json`, json)
                         })
                         .then((r) => {
                           uiToastSuccess('Project exported', r.path)
@@ -3153,19 +3339,31 @@ export function SettingsView() {
             </Card>
 
             <Card className="p-5 bg-card border-border">
-              <h3 className="text-sm font-semibold text-foreground mb-4">Updates</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-foreground">Updates</h3>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    checkForUpdates({ manual: true }).catch((e) => uiToastError('Update check failed', String(e)))
+                  }}
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Check
+                </Button>
+              </div>
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium">Auto-update</p>
-                    <p className="text-xs text-muted-foreground">Download updates automatically</p>
+                    <p className="text-xs text-muted-foreground">Check GitHub for update notices</p>
                   </div>
                   <Switch checked={Boolean(settings?.autoUpdate)} onCheckedChange={(v) => update({ autoUpdate: v })} />
                 </div>
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium">Beta Updates</p>
-                    <p className="text-xs text-muted-foreground">Receive pre-release versions</p>
+                    <p className="text-xs text-muted-foreground">Reserved for pre-release update notices</p>
                   </div>
                   <Switch checked={Boolean(settings?.betaUpdates)} onCheckedChange={(v) => update({ betaUpdates: v })} />
                 </div>
@@ -3210,7 +3408,7 @@ export function SettingsView() {
           <Card className="p-5 bg-card border-border">
             <div className="flex items-center gap-4 mb-6">
               <div className="w-16 h-16 rounded-xl bg-muted flex items-center justify-center shadow-sm overflow-hidden">
-                <Image src="/logo.png" alt="Skuntir" width={56} height={56} />
+                <Image src="/logo.png" alt="Proxer" width={56} height={56} />
               </div>
               <div>
                 <h2 className="text-xl font-bold">Proxer</h2>

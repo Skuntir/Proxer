@@ -1,6 +1,15 @@
 {
-  "dependencies": {
-    "next": "^16.2.4",
-    "react": "^19.2.5"
+  "name": "proxer-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend exec tauri -- dev",
+    "build": "npm --prefix frontend exec tauri -- build --ci",
+    "build:no-bundle": "npm --prefix frontend exec tauri -- build --ci --no-bundle",
+    "tauri": "npm --prefix frontend exec tauri --",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:typecheck": "npm --prefix frontend exec -- tsc -p frontend/tsconfig.json --noEmit",
+    "backend:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "check": "npm run frontend:typecheck && npm run backend:check"
   }
 }

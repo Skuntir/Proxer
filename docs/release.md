@@ -18,13 +18,11 @@ From the repository root:
 
 1. Install frontend dependencies:
 
-   - `cd frontend`
-   - `npm install`
+   - `npm --prefix frontend ci`
 
 2. Build the Tauri app:
 
-   - `cd ../src-tauri`
-   - `cargo tauri build`
+   - `npm run build`
 
 This runs the configured frontend build steps and produces native bundles for your platform.
 
@@ -64,6 +62,6 @@ Recommended steps:
 - Versions updated
 - `cargo check` passes
 - `npm run build` passes
-- `cargo tauri build` completes on each target platform
+- `npm run build` completes on each target platform
 - Installer and app launch smoke tests done
 - Release artifacts uploaded to GitHub Releases

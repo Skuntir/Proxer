@@ -9,10 +9,6 @@ pub struct SessionConfig {
     pub last_project_path: Option<String>,
 }
 
-pub fn default_project_db_path(app: &AppHandle) -> tauri::Result<PathBuf> {
-    app.path().resolve("proxer/proxer.db", BaseDirectory::AppData)
-}
-
 pub fn session_config_path(app: &AppHandle) -> tauri::Result<PathBuf> {
     app.path().resolve("proxer/session.json", BaseDirectory::AppData)
 }
@@ -41,4 +37,3 @@ pub fn temp_project_db_path() -> PathBuf {
     let id = uuid::Uuid::new_v4().to_string();
     std::env::temp_dir().join("proxer-temp").join(format!("proxer-{id}.db"))
 }
-

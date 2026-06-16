@@ -14,7 +14,7 @@ pub fn enable_system_proxy(bind: SocketAddr) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let backup_root = hkcu
-        .create_subkey("Software\\Skuntir\\ProxyBackup")
+        .create_subkey("Software\\Proxer\\ProxyBackup")
         .map_err(|e| e.to_string())?
         .0;
 
@@ -57,7 +57,9 @@ pub fn disable_system_proxy() -> Result<(), String> {
         .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", KEY_READ | KEY_WRITE)
         .map_err(|e| e.to_string())?;
 
-    let backup = hkcu.open_subkey_with_flags("Software\\Skuntir\\ProxyBackup", KEY_READ | KEY_WRITE);
+    let backup = hkcu
+        .open_subkey_with_flags("Software\\Proxer\\ProxyBackup", KEY_READ | KEY_WRITE)
+        .or_else(|_| hkcu.open_subkey_with_flags("Software\\Skuntir\\ProxyBackup", KEY_READ | KEY_WRITE));
     if let Ok(backup) = backup {
         let active: u32 = backup.get_value("Active").unwrap_or(0);
         if active == 1 {

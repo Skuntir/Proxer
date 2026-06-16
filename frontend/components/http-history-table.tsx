@@ -1,7 +1,7 @@
 'use client'
 
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { HttpRequest } from '@/lib/proxer'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { Lock, Unlock } from 'lucide-react'
@@ -51,6 +51,46 @@ export function HttpHistoryTable({
   selectedRequest,
   onSelectRequest,
 }: HttpHistoryTableProps) {
+  const rowHeight = 41
+  const overscan = 12
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const scrollFrameRef = useRef<number | null>(null)
+  const [viewport, setViewport] = useState({ top: 0, height: 0 })
+  const totalHeight = requests.length * rowHeight
+  const start = Math.max(0, Math.floor(viewport.top / rowHeight) - overscan)
+  const visibleCount = Math.ceil((viewport.height || 600) / rowHeight) + overscan * 2
+  const end = Math.min(requests.length, start + visibleCount)
+  const visibleRequests = requests.slice(start, end)
+  const statusCounts = useMemo(
+    () => ({
+      success2xx: requests.filter((r) => r.statusCode >= 200 && r.statusCode < 300).length,
+      client4xx: requests.filter((r) => r.statusCode >= 400 && r.statusCode < 500).length,
+      server5xx: requests.filter((r) => r.statusCode >= 500).length,
+    }),
+    [requests]
+  )
+
+  const updateViewport = () => {
+    const el = scrollRef.current
+    if (!el) return
+    setViewport({ top: el.scrollTop, height: el.clientHeight })
+  }
+
+  const scheduleViewportUpdate = () => {
+    if (scrollFrameRef.current !== null) return
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      updateViewport()
+    })
+  }
+
+  useEffect(() => {
+    updateViewport()
+    return () => {
+      if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current)
+    }
+  }, [requests.length])
+
   return (
     <div className="flex flex-col h-full bg-card">
       {/* Table header */}
@@ -65,8 +105,8 @@ export function HttpHistoryTable({
       </div>
 
       {/* Table body */}
-      <ScrollArea className="flex-1 min-h-0">
-        <div>
+      <div ref={scrollRef} onScroll={scheduleViewportUpdate} className="fast-scroll flex-1 min-h-0 overflow-auto" onMouseEnter={updateViewport}>
+        <div style={{ height: requests.length === 0 ? undefined : totalHeight, position: 'relative' }}>
           {requests.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
               <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-3">
@@ -76,12 +116,15 @@ export function HttpHistoryTable({
               <p className="text-xs mt-1">Configure your browser to use the proxy and start browsing</p>
             </div>
           ) : (
-            requests.map((request, index) => (
+            <div style={{ transform: `translateY(${start * rowHeight}px)` }}>
+            {visibleRequests.map((request, localIndex) => {
+              const index = start + localIndex
+              return (
               <button
                 key={request.id}
                 onClick={() => onSelectRequest(request)}
                 className={cn(
-                  'w-full grid grid-cols-[40px_70px_32px_1fr_70px_60px_60px] gap-2 px-4 py-2.5 text-sm transition-all text-left border-b border-border/50',
+                  'w-full grid grid-cols-[40px_70px_32px_1fr_70px_60px_60px] gap-2 px-4 py-2.5 text-sm transition-colors text-left border-b border-border/50',
                   'hover:bg-muted/50',
                   selectedRequest?.id === request.id && 'bg-primary/5 hover:bg-primary/10 border-l-2 border-l-primary'
                 )}
@@ -124,10 +167,12 @@ export function HttpHistoryTable({
                   {request.size}
                 </div>
               </button>
-            ))
+              )
+            })}
+            </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Footer with stats */}
       <div className="px-4 py-2 border-t border-border bg-muted/30 flex items-center justify-between text-xs text-muted-foreground">
@@ -135,15 +180,15 @@ export function HttpHistoryTable({
         <div className="flex items-center gap-4">
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-status-success" />
-            2xx: {requests.filter(r => r.statusCode >= 200 && r.statusCode < 300).length}
+            2xx: {statusCounts.success2xx}
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-status-client-error" />
-            4xx: {requests.filter(r => r.statusCode >= 400 && r.statusCode < 500).length}
+            4xx: {statusCounts.client4xx}
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-status-server-error" />
-            5xx: {requests.filter(r => r.statusCode >= 500).length}
+            5xx: {statusCounts.server5xx}
           </span>
         </div>
       </div>

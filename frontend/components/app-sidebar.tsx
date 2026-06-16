@@ -22,7 +22,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import Image from 'next/image'
 
 const iconMap: Record<string, React.ComponentType<{ className?: string; strokeWidth?: number }>> = {
   LayoutDashboard,
@@ -124,26 +123,8 @@ export function AppSidebar({
           collapsed ? 'w-[52px]' : 'w-[220px]'
         )}
       >
-        {/* Logo area */}
-        <div className={cn(
-          'flex items-center h-14 border-b border-border',
-          collapsed ? 'justify-center px-2' : 'px-4'
-        )}>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black flex items-center justify-center shadow-sm overflow-hidden">
-              <Image src="/logo.png" alt="Skuntir" width={32} height={32} />
-            </div>
-            {!collapsed && (
-              <div className="flex flex-col">
-                <span className="text-sm font-bold text-foreground tracking-tight">Proxer</span>
-                <span className="text-[10px] text-muted-foreground font-medium">HTTP/S Proxy</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* Navigation items */}
-        <nav className="flex-1 overflow-y-auto py-4 px-2">
+        <nav className="flex-1 overflow-y-auto py-3 px-2">
           {/* Main navigation */}
           <div className="space-y-0.5">
             {!collapsed && (

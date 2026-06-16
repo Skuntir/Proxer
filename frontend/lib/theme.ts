@@ -12,7 +12,7 @@ export type ThemeSetting =
 
 export function applyTheme(setting: ThemeSetting) {
   const root = document.documentElement
-  const s = (setting || 'system') as string
+  const s = (setting || 'dark-color-amoled-red') as string
 
   const toTone = (v: string) => {
     if (v.includes('gray') || v.includes('grey') || v.includes('grayscale')) return 'gray'
@@ -55,6 +55,7 @@ export function applyTheme(setting: ThemeSetting) {
       'night-owl',
       'papercolor',
       'vesper',
+      'amoled-red',
     ]
     for (const k of known) {
       if (lower.includes(k)) return k
@@ -94,4 +95,3 @@ export function onSystemThemeChange(handler: () => void): (() => void) | null {
     return null
   }
 }
-

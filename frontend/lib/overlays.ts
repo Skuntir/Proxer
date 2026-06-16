@@ -41,6 +41,13 @@ type OverlayOpenDetail =
       body?: string
       okText?: string
     }
+  | {
+      id: number
+      kind: 'update'
+      currentVersion: string
+      latestVersion: string
+      repoUrl: string
+    }
 
 type OverlayResolvedDetail = { id: number; result: any }
 
@@ -117,3 +124,10 @@ export function uiInfo(opts: { title: string; description?: string; body?: strin
   return openOverlay<void>({ kind: 'info', ...opts })
 }
 
+export function uiUpdateAvailable(opts: {
+  currentVersion: string
+  latestVersion: string
+  repoUrl: string
+}): Promise<boolean> {
+  return openOverlay<boolean>({ kind: 'update', ...opts })
+}

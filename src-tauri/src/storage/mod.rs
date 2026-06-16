@@ -8,7 +8,6 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Row, SqlitePool,
 };
-use tauri::{path::BaseDirectory, AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::{
@@ -21,13 +20,6 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
-    pub async fn open(app: &AppHandle) -> tauri::Result<Self> {
-        let db_path = app
-            .path()
-            .resolve("proxer/proxer.db", BaseDirectory::AppData)?;
-        Self::open_at(db_path).await
-    }
-
     pub async fn open_at(db_path: PathBuf) -> tauri::Result<Self> {
 
         if let Some(parent) = db_path.parent() {
@@ -231,7 +223,31 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn prune_traffic(&self, max_rows: i64) -> Result<()> {
+        if max_rows < 1 {
+            return Ok(());
+        }
+
+        sqlx::query(
+            r#"
+            DELETE FROM traffic
+            WHERE rowid NOT IN (
+              SELECT rowid
+              FROM traffic
+              ORDER BY started_ms DESC
+              LIMIT ?1
+            )
+            "#,
+        )
+        .bind(max_rows)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn list(&self, limit: u32, offset: u32) -> Result<Vec<HistoryEntrySummary>> {
+        let limit = limit.clamp(1, 2000);
         let rows = sqlx::query(
             r#"
             SELECT id, started_ms, method, url, resp_status, elapsed_ms,
@@ -419,6 +435,7 @@ impl SqliteStore {
     }
 
     pub async fn logs_list(&self, level: Option<&str>, limit: u32, offset: u32) -> Result<Vec<(String, i64, String, String, String)>> {
+        let limit = limit.clamp(1, 2000);
         let rows = match level {
             Some(level) => {
                 sqlx::query(
@@ -465,6 +482,7 @@ impl SqliteStore {
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn vulnerabilities_upsert(
         &self,
         id: &str,
@@ -511,6 +529,7 @@ impl SqliteStore {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<(String, i64, String, String, String, String, String, String, String, Option<String>, Option<String>, i64)>> {
+        let limit = limit.clamp(1, 2000);
         let rows = match severity {
             Some(sev) => {
                 sqlx::query(
@@ -602,6 +621,7 @@ impl SqliteStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn intruder_result_insert(
         &self,
         id: &str,
@@ -644,6 +664,7 @@ impl SqliteStore {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<(String, i64, i64, Option<i64>, Option<i64>, Option<i64>, Option<String>, String, Option<String>)>> {
+        let limit = limit.clamp(1, 5000);
         let rows = sqlx::query(
             r#"
             SELECT id, ts_ms, seq, status_code, duration_ms, size, NULLIF(error, '') as error, raw_request, NULLIF(raw_response, '') as raw_response
@@ -788,6 +809,24 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn extension_enabled(&self, id: &str) -> Result<bool> {
+        let row = sqlx::query(
+            r#"
+            SELECT enabled
+            FROM extensions
+            WHERE id = ?1 AND installed = 1
+            LIMIT 1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row
+            .map(|r| r.get::<i64, _>("enabled") != 0)
+            .unwrap_or(false))
+    }
+
     pub async fn traffic_stats(&self) -> Result<(i64, i64, Option<f64>, i64, i64)> {
         let row = sqlx::query(
             r#"
@@ -812,6 +851,7 @@ impl SqliteStore {
     }
 
     pub async fn traffic_sitemap_rows(&self, limit: u32) -> Result<Vec<(String, String, String, i64, String, i64, Option<i64>)>> {
+        let limit = limit.clamp(1, 5000);
         let rows = sqlx::query(
             r#"
             SELECT
@@ -891,6 +931,7 @@ impl SqliteStore {
     }
 
     pub async fn traffic_top_hosts(&self, limit: u32) -> Result<Vec<(String, i64)>> {
+        let limit = limit.clamp(1, 1000);
         let rows = sqlx::query(
             r#"
             SELECT host, count(1) as c
@@ -907,6 +948,32 @@ impl SqliteStore {
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             out.push((r.get::<String, _>("host"), r.get::<i64, _>("c")));
+        }
+        Ok(out)
+    }
+
+    pub async fn traffic_activity_buckets(&self, since_ms: i64, bucket_ms: i64, limit: u32) -> Result<Vec<(i64, i64)>> {
+        let bucket_ms = bucket_ms.max(1);
+        let limit = limit.clamp(1, 240);
+        let rows = sqlx::query(
+            r#"
+            SELECT ((started_ms / ?1) * ?1) as bucket_ms, count(1) as c
+            FROM traffic
+            WHERE started_ms >= ?2
+            GROUP BY bucket_ms
+            ORDER BY bucket_ms ASC
+            LIMIT ?3
+            "#,
+        )
+        .bind(bucket_ms)
+        .bind(since_ms)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push((r.get::<i64, _>("bucket_ms"), r.get::<i64, _>("c")));
         }
         Ok(out)
     }
@@ -935,6 +1002,7 @@ impl SqliteStore {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<(String, i64, String, String, String, Option<i64>, Option<String>, Option<String>)>> {
+        let limit = limit.clamp(1, 10_000);
         let rows = sqlx::query(
             r#"
             SELECT id, started_ms, scheme, host, url, resp_status,
@@ -995,9 +1063,4 @@ impl StoreHandle {
 
 fn parse_json_list<T: serde::de::DeserializeOwned>(s: String) -> Result<T> {
     serde_json::from_str::<T>(&s).map_err(|e| AppError::Other(format!("invalid stored json: {e}")))
-}
-
-#[allow(dead_code)]
-fn _db_path(app: &AppHandle) -> tauri::Result<PathBuf> {
-    app.path().resolve("proxer/proxer.db", BaseDirectory::AppData)
 }

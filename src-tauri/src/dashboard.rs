@@ -39,6 +39,13 @@ pub struct DashboardSeverityItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DashboardActivityItem {
+    pub bucket_ms: i64,
+    pub requests: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SystemStatus {
     pub cpu: i64,
     pub memory: i64,
@@ -51,6 +58,7 @@ pub struct DashboardDetails {
     pub response_codes: DashboardResponseCodes,
     pub top_hosts: Vec<DashboardHostItem>,
     pub severity: Vec<DashboardSeverityItem>,
+    pub activity: Vec<DashboardActivityItem>,
     pub system: SystemStatus,
 }
 
@@ -64,7 +72,7 @@ pub async fn compute_dashboard_stats(store: Arc<SqliteStore>) -> Result<Dashboar
     })
 }
 
-pub async fn compute_dashboard_details(store: Arc<SqliteStore>) -> Result<DashboardDetails> {
+pub async fn compute_dashboard_details(store: Arc<SqliteStore>, range: Option<&str>) -> Result<DashboardDetails> {
     let (c2, c3, c4, c5, c0) = store.traffic_status_buckets().await?;
     let top_hosts = store
         .traffic_top_hosts(6)
@@ -80,6 +88,29 @@ pub async fn compute_dashboard_details(store: Arc<SqliteStore>) -> Result<Dashbo
         .map(|(severity, count)| DashboardSeverityItem { severity, count })
         .collect::<Vec<_>>();
 
+    let now = crate::events::now_ms();
+    let (bucket_count, bucket_ms) = match range.unwrap_or("24h") {
+        "1h" => (12_i64, 5 * 60 * 1000),
+        "7d" => (7_i64, 24 * 60 * 60 * 1000),
+        "30d" => (30_i64, 24 * 60 * 60 * 1000),
+        _ => (24_i64, 60 * 60 * 1000),
+    };
+    let since_ms = now.saturating_sub((bucket_count - 1) * bucket_ms);
+    let mut raw_activity = store
+        .traffic_activity_buckets(since_ms, bucket_ms, bucket_count as u32)
+        .await?
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut activity = Vec::with_capacity(bucket_count as usize);
+    let first_bucket = (since_ms / bucket_ms) * bucket_ms;
+    for i in 0..bucket_count {
+        let bucket = first_bucket + (i * bucket_ms);
+        activity.push(DashboardActivityItem {
+            bucket_ms: bucket,
+            requests: raw_activity.remove(&bucket).unwrap_or(0),
+        });
+    }
+
     let system = read_system_status();
 
     Ok(DashboardDetails {
@@ -92,6 +123,7 @@ pub async fn compute_dashboard_details(store: Arc<SqliteStore>) -> Result<Dashbo
         },
         top_hosts,
         severity,
+        activity,
         system,
     })
 }

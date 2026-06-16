@@ -62,6 +62,13 @@ type OverlayOpenDetail =
       body?: string
       okText?: string
     }
+  | {
+      id: number
+      kind: 'update'
+      currentVersion: string
+      latestVersion: string
+      repoUrl: string
+    }
 
 export function AppOverlays() {
   const [open, setOpen] = useState(false)
@@ -76,6 +83,7 @@ export function AppOverlays() {
   const isPrompt = kind === 'prompt'
   const isTwoField = kind === 'twoField'
   const isInfo = kind === 'info'
+  const isUpdate = kind === 'update'
 
   useEffect(() => {
     const onOpen = (ev: Event) => {
@@ -98,8 +106,8 @@ export function AppOverlays() {
     return () => window.removeEventListener('skuntir:overlay:open', onOpen)
   }, [])
 
-  const title = detail?.title ?? ''
-  const description = detail?.description
+  const title = detail && detail.kind !== 'update' ? detail.title : ''
+  const description = detail && detail.kind !== 'update' ? detail.description : undefined
 
   const confirmText = useMemo(() => {
     if (!detail) return 'OK'
@@ -107,6 +115,7 @@ export function AppOverlays() {
     if (detail.kind === 'prompt') return detail.confirmText ?? 'OK'
     if (detail.kind === 'twoField') return detail.confirmText ?? 'OK'
     if (detail.kind === 'info') return detail.okText ?? 'OK'
+    if (detail.kind === 'update') return 'Open GitHub'
     return 'OK'
   }, [detail])
 
@@ -115,6 +124,7 @@ export function AppOverlays() {
     if (detail.kind === 'confirm') return detail.cancelText ?? 'Cancel'
     if (detail.kind === 'prompt') return detail.cancelText ?? 'Cancel'
     if (detail.kind === 'twoField') return detail.cancelText ?? 'Cancel'
+    if (detail.kind === 'update') return 'Later'
     return 'Cancel'
   }, [detail])
 
@@ -171,7 +181,7 @@ export function AppOverlays() {
       </AlertDialog>
 
       <Dialog
-        open={open && (isPrompt || isTwoField || isInfo)}
+        open={open && (isPrompt || isTwoField || isInfo || isUpdate)}
         onOpenChange={(next) => {
           if (!next && (isPrompt || isTwoField)) {
             resolve(null)
@@ -181,12 +191,23 @@ export function AppOverlays() {
             resolve(undefined)
             close()
           }
+          if (!next && isUpdate) {
+            resolve(false)
+            close()
+          }
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            {description && <DialogDescription>{description}</DialogDescription>}
+            <DialogTitle>{isUpdate ? 'Update available' : title}</DialogTitle>
+            {isUpdate ? (
+              <DialogDescription>
+                Proxer {detail?.kind === 'update' ? detail.latestVersion : ''} is available. You are running{' '}
+                {detail?.kind === 'update' ? detail.currentVersion : ''}. Update to get the latest bug fixes and stability improvements.
+              </DialogDescription>
+            ) : (
+              description && <DialogDescription>{description}</DialogDescription>
+            )}
           </DialogHeader>
 
           {detail?.kind === 'prompt' && (
@@ -246,12 +267,28 @@ export function AppOverlays() {
             <Textarea value={detail.body} readOnly className="font-mono text-xs min-h-56" />
           )}
 
+          {detail?.kind === 'update' && (
+            <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Current</span>
+                <span className="font-mono">{detail.currentVersion}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Latest</span>
+                <span className="font-mono font-semibold text-foreground">{detail.latestVersion}</span>
+              </div>
+              <div className="mt-3 truncate border-t border-border pt-3 font-mono text-xs text-muted-foreground">
+                {detail.repoUrl}
+              </div>
+            </div>
+          )}
+
           <DialogFooter>
-            {(isPrompt || isTwoField) && (
+            {(isPrompt || isTwoField || isUpdate) && (
               <Button
                 variant="outline"
                 onClick={() => {
-                  resolve(null)
+                  resolve(isUpdate ? false : null)
                   close()
                 }}
               >
@@ -264,6 +301,8 @@ export function AppOverlays() {
                   resolve(value)
                 } else if (detail?.kind === 'twoField') {
                   resolve({ a, b })
+                } else if (detail?.kind === 'update') {
+                  resolve(true)
                 } else {
                   resolve(undefined)
                 }
@@ -278,4 +317,3 @@ export function AppOverlays() {
     </>
   )
 }
-

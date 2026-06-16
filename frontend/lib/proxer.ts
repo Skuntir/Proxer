@@ -121,6 +121,10 @@ export async function settingsSet(patch: Partial<Settings>): Promise<Settings> {
   return invoke<Settings>('settings_set', { patch })
 }
 
+export async function projectOpenFolderDialog(): Promise<ProjectStatus | null> {
+  return invoke<ProjectStatus | null>('project_open_folder_dialog')
+}
+
 export type LogEntry = {
   id: string
   timestamp: string
@@ -162,11 +166,12 @@ export type DashboardDetails = {
   }
   topHosts: { host: string; requests: number }[]
   severity: { severity: string; count: number }[]
+  activity: { bucketMs: number; requests: number }[]
   system: { cpu: number; memory: number; disk: number }
 }
 
-export async function dashboardDetails(): Promise<DashboardDetails> {
-  return invoke<DashboardDetails>('dashboard_details')
+export async function dashboardDetails(range?: string): Promise<DashboardDetails> {
+  return invoke<DashboardDetails>('dashboard_details', { range })
 }
 
 export async function configExport(): Promise<string> {
@@ -433,30 +438,48 @@ export async function interceptDrop(interceptionId: string): Promise<void> {
   return invoke<void>('intercept_drop', { interception_id: interceptionId })
 }
 
-export async function onBackendEvent(handler: (ev: BackendEvent) => void): Promise<UnlistenFn> {
-  let alive = true
-  let cursor = 0
+const backendEventHandlers = new Set<(ev: BackendEvent) => void>()
+let backendEventLoopRunning = false
 
+export async function onBackendEvent(handler: (ev: BackendEvent) => void): Promise<UnlistenFn> {
+  backendEventHandlers.add(handler)
+  startBackendEventLoop()
+
+  return () => {
+    backendEventHandlers.delete(handler)
+  }
+}
+
+function startBackendEventLoop() {
+  if (backendEventLoopRunning) return
+  backendEventLoopRunning = true
+
+  let cursor = 0
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
   ;(async () => {
-    while (alive) {
+    while (backendEventLoopRunning) {
+      if (backendEventHandlers.size === 0) {
+        await sleep(250)
+        continue
+      }
+
       try {
         const res = await invoke<{ cursor: number; events: BackendEvent[] }>('events_poll', {
           cursor,
           timeout_ms: 2500,
         })
         cursor = res.cursor
-        for (const ev of res.events) handler(ev)
+        for (const ev of res.events) {
+          for (const activeHandler of [...backendEventHandlers]) {
+            activeHandler(ev)
+          }
+        }
       } catch {
         await sleep(750)
       }
     }
   })()
-
-  return () => {
-    alive = false
-  }
 }
 
 export function formatDurationMs(ms?: number | null): string {

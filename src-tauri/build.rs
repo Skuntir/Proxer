@@ -12,7 +12,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").ok().as_deref() == Some("windows") {
         let manifest = std::path::Path::new("windows/app.manifest")
             .canonicalize()
-            .unwrap();
+            .expect("windows/app.manifest is required for Windows builds");
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
         println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
         println!("cargo:rustc-link-arg=/WX");

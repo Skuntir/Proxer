@@ -14,6 +14,7 @@ import {
   interceptSetEnabled,
   onBackendEvent,
   ProjectStatus,
+  projectOpenFolderDialog,
   projectOpen,
   projectStatus,
   projectUseTemporary,
@@ -22,9 +23,10 @@ import {
   uiHistoryGet,
   uiHistoryList,
 } from '@/lib/proxer'
-import { uiConfirm, uiToastSuccess } from '@/lib/overlays'
+import { uiConfirm, uiToastError, uiToastSuccess } from '@/lib/overlays'
 import { applyTheme, onSystemThemeChange } from '@/lib/theme'
 import { applyTypography } from '@/lib/typography'
+import { checkForUpdates } from '@/lib/update-check'
 import {
   DashboardView,
   TargetView,
@@ -58,8 +60,9 @@ export default function ProxyApp() {
   const [projectReady, setProjectReady] = useState(false)
   const [startupProjectDialogOpen, setStartupProjectDialogOpen] = useState(false)
   const [startupProjectStatus, setStartupProjectStatus] = useState<ProjectStatus | null>(null)
-  const themeSettingRef = useRef<string>('system')
+  const themeSettingRef = useRef<string>('dark-color-amoled-red')
   const interceptToggleInFlightRef = useRef(false)
+  const maxHistoryItemsRef = useRef(1000)
 
   useEffect(() => {
     let cancelled = false
@@ -67,15 +70,11 @@ export default function ProxyApp() {
       .then((st) => {
         if (cancelled) return
         setStartupProjectStatus(st)
-        if (st.mode === 'temporary') {
-          setStartupProjectDialogOpen(true)
-          return
-        }
-        setProjectReady(true)
+        setStartupProjectDialogOpen(true)
       })
       .catch(() => {
         if (cancelled) return
-        setProjectReady(true)
+        setStartupProjectDialogOpen(true)
       })
 
     return () => {
@@ -91,7 +90,7 @@ export default function ProxyApp() {
     let unlistenSystem: (() => void) | null = null
     const onThemeEvent = (ev: Event) => {
       const e = ev as CustomEvent
-      const next = (e.detail?.theme as string | undefined) ?? 'system'
+      const next = (e.detail?.theme as string | undefined) ?? 'dark-color-amoled-red'
       themeSettingRef.current = next
       applyTheme(next)
     }
@@ -104,14 +103,18 @@ export default function ProxyApp() {
 
       try {
         const s = await settingsGet()
-        themeSettingRef.current = s.theme ?? 'system'
+        themeSettingRef.current = s.theme ?? 'dark-color-amoled-red'
         applyTheme(themeSettingRef.current)
         applyTypography(s)
         setShowConnectTunnels(Boolean(s.showConnectTunnels))
+        maxHistoryItemsRef.current = Math.max(100, Math.min(s.maxHistoryItems || 1000, 2000))
+        if (s.autoUpdate !== false) {
+          checkForUpdates().catch(() => {})
+        }
       } catch {}
 
       try {
-        const initial = await uiHistoryList(500, 0)
+        const initial = await uiHistoryList(maxHistoryItemsRef.current, 0)
         if (!cancelled) setRequests(initial)
       } catch {
         if (!cancelled) setRequests([])
@@ -128,7 +131,7 @@ export default function ProxyApp() {
               url = null
             }
             const protocol = ev.payload.scheme === 'https' ? 'HTTPS' : 'HTTP'
-            return [
+            const next = [
               {
                 id: ev.payload.id,
                 method: ev.payload.method,
@@ -150,6 +153,7 @@ export default function ProxyApp() {
               },
               ...prev,
             ]
+            return next.length > maxHistoryItemsRef.current ? next.slice(0, maxHistoryItemsRef.current) : next
           })
         }
 
@@ -173,7 +177,7 @@ export default function ProxyApp() {
     init()
 
     unlistenSystem = onSystemThemeChange(() => {
-      const t = themeSettingRef.current || 'system'
+      const t = themeSettingRef.current || 'dark-color-amoled-red'
       if (t === 'system' || t.startsWith('system-')) {
         applyTheme(t)
       }
@@ -181,9 +185,18 @@ export default function ProxyApp() {
 
     const onSettingsUpdated = (ev: Event) => {
       const e = ev as CustomEvent
-      const detail = (e.detail || {}) as { showConnectTunnels?: boolean; fontSize?: number; fontFamily?: string }
+      const detail = (e.detail || {}) as {
+        showConnectTunnels?: boolean
+        fontSize?: number
+        fontFamily?: string
+        maxHistoryItems?: number
+      }
       if (typeof detail.showConnectTunnels === 'boolean') {
         setShowConnectTunnels(detail.showConnectTunnels)
+      }
+      if (typeof detail.maxHistoryItems === 'number') {
+        maxHistoryItemsRef.current = Math.max(100, Math.min(detail.maxHistoryItems || 1000, 2000))
+        setRequests((prev) => prev.slice(0, maxHistoryItemsRef.current))
       }
       if (typeof detail.fontSize === 'number' || typeof detail.fontFamily === 'string') {
         applyTypography({ fontSize: detail.fontSize, fontFamily: detail.fontFamily })
@@ -354,23 +367,16 @@ export default function ProxyApp() {
     }
   }
 
-  const joinPath = (dir: string, filename: string) => {
-    const trimmed = dir.replace(/[\\/]+$/, '')
-    const sep = trimmed.includes('\\') ? '\\' : '/'
-    return `${trimmed}${sep}${filename}`
-  }
-
-  const pickProjectFolder = async (): Promise<string | null> => {
-    const mod = await import('@tauri-apps/plugin-dialog')
-    const picked = await mod.open({
-      title: 'Select a project folder',
-      directory: true,
-      multiple: false,
-    })
-    if (!picked) return null
-    if (typeof picked === 'string') return picked
-    if (Array.isArray(picked) && typeof picked[0] === 'string') return picked[0]
-    return null
+  const openProjectFolder = async () => {
+    try {
+      const status = await projectOpenFolderDialog()
+      if (!status) return
+      setStartupProjectStatus(status)
+      setStartupProjectDialogOpen(false)
+      setProjectReady(true)
+    } catch (e) {
+      uiToastError('Could not open project folder', String(e))
+    }
   }
 
   return (
@@ -396,8 +402,12 @@ export default function ProxyApp() {
                   const p = startupProjectStatus.recentPath
                   if (!p) return
                   projectOpen(p)
-                    .then(() => window.location.reload())
-                    .catch(() => {})
+                    .then((st) => {
+                      setStartupProjectStatus(st)
+                      setStartupProjectDialogOpen(false)
+                      setProjectReady(true)
+                    })
+                    .catch((e) => uiToastError('Could not open recent project', String(e)))
                 }}
               >
                 Open recent project
@@ -425,12 +435,7 @@ export default function ProxyApp() {
             <Button
               variant="outline"
               onClick={() => {
-                pickProjectFolder()
-                  .then((dir) => {
-                    if (!dir) return
-                    return projectOpen(joinPath(dir, 'proxer.db')).then(() => window.location.reload())
-                  })
-                  .catch(() => {})
+                openProjectFolder()
               }}
             >
               Open project folder…
@@ -439,12 +444,7 @@ export default function ProxyApp() {
             <Button
               variant="outline"
               onClick={() => {
-                pickProjectFolder()
-                  .then((dir) => {
-                    if (!dir) return
-                    return projectOpen(joinPath(dir, 'proxer.db')).then(() => window.location.reload())
-                  })
-                  .catch(() => {})
+                openProjectFolder()
               }}
             >
               Create project in folder…

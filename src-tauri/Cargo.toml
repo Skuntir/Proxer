@@ -1,12 +1,11 @@
 [package]
 name = "proxer"
-version = "0.1.0"
+version = "1.0.2"
 edition = "2021"
 default-run = "proxer"
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
 
 tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "sync"] }
 futures = "0.3"
@@ -40,6 +39,7 @@ dashmap = "6"
 cookie = "0.18"
 time = { version = "0.3", features = ["formatting"] }
 regex = "1"
+rfd = "0.15"
 
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "uuid"] }
 

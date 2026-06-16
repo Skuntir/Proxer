@@ -1,11 +1,12 @@
 'use client'
 
-import { HttpRequest } from '@/lib/proxer'
+import { extensionsList, HttpRequest } from '@/lib/proxer'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Copy, Check, X, ChevronDown } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 interface DetailPanelProps {
@@ -165,6 +166,54 @@ function getStatusColor(status: number) {
 }
 
 export function DetailPanel({ request, onClose }: DetailPanelProps) {
+  const [trafficTaggerEnabled, setTrafficTaggerEnabled] = useState(false)
+  const [tagInput, setTagInput] = useState('')
+  const [tagMap, setTagMap] = useState<Record<string, string[]>>({})
+
+  useEffect(() => {
+    extensionsList(true)
+      .then((items) => setTrafficTaggerEnabled(items.some((e) => e.id === 'ext.traffic-tags' && e.enabled)))
+      .catch(() => setTrafficTaggerEnabled(false))
+
+    try {
+      setTagMap(JSON.parse(localStorage.getItem('proxer:traffic-tags') || '{}'))
+    } catch {
+      setTagMap({})
+    }
+  }, [])
+
+  const requestTags = useMemo(() => {
+    if (!request) return []
+    return tagMap[request.id] ?? []
+  }, [request, tagMap])
+
+  const saveTags = (next: Record<string, string[]>) => {
+    setTagMap(next)
+    localStorage.setItem('proxer:traffic-tags', JSON.stringify(next))
+  }
+
+  const addTag = () => {
+    if (!request) return
+    const tag = tagInput.trim().replace(/\s+/g, '-').slice(0, 32)
+    if (!tag) return
+    const current = tagMap[request.id] ?? []
+    if (current.includes(tag)) {
+      setTagInput('')
+      return
+    }
+    saveTags({ ...tagMap, [request.id]: [...current, tag] })
+    setTagInput('')
+  }
+
+  const removeTag = (tag: string) => {
+    if (!request) return
+    const nextTags = (tagMap[request.id] ?? []).filter((t) => t !== tag)
+    const next = { ...tagMap }
+    if (nextTags.length === 0) delete next[request.id]
+    else next[request.id] = nextTags
+    saveTags(next)
+  }
+
   if (!request) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground bg-card border-t border-border">
@@ -226,6 +275,14 @@ ${request.responseBody ? `\n${request.responseBody}` : ''}`
             <TabsTrigger value="headers" className="text-xs px-3 data-[state=active]:bg-card data-[state=active]:shadow-sm">Headers</TabsTrigger>
             <TabsTrigger value="body" className="text-xs px-3 data-[state=active]:bg-card data-[state=active]:shadow-sm">Body</TabsTrigger>
             <TabsTrigger value="raw" className="text-xs px-3 data-[state=active]:bg-card data-[state=active]:shadow-sm">Raw</TabsTrigger>
+            {trafficTaggerEnabled && (
+              <TabsTrigger value="tags" className="text-xs px-3 data-[state=active]:bg-card data-[state=active]:shadow-sm">
+                Tags
+                {requestTags.length > 0 && (
+                  <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">{requestTags.length}</Badge>
+                )}
+              </TabsTrigger>
+            )}
             <TabsTrigger value="cookies" className="text-xs px-3 data-[state=active]:bg-card data-[state=active]:shadow-sm">
               Cookies
               {request.cookies.length > 0 && (
@@ -255,6 +312,47 @@ ${request.responseBody ? `\n${request.responseBody}` : ''}`
               <CodeBlock content={rawResponse} title="Raw Response" />
             </div>
           </TabsContent>
+
+          {trafficTaggerEnabled && (
+            <TabsContent value="tags" className="m-0 p-4 flex-1 min-h-0 overflow-auto">
+              <div className="rounded-md border border-border p-4 space-y-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Traffic Tags</p>
+                  <p className="text-xs text-muted-foreground mt-1">Tags are stored locally and follow this request ID.</p>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') addTag()
+                    }}
+                    placeholder="auth, api, interesting..."
+                    className="h-9"
+                  />
+                  <Button size="sm" onClick={addTag}>Add</Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {requestTags.length === 0 ? (
+                    <span className="text-sm text-muted-foreground italic">No tags yet</span>
+                  ) : (
+                    requestTags.map((tag) => (
+                      <Badge key={tag} variant="outline" className="gap-1.5">
+                        {tag}
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-foreground"
+                          onClick={() => removeTag(tag)}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    ))
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+          )}
 
           <TabsContent value="cookies" className="m-0 p-4 flex-1 min-h-0 overflow-auto">
             <CookiesTable cookies={request.cookies} />

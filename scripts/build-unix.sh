@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$repo_root/frontend"
 if [[ -f package-lock.json ]]; then
-  if [[ ! -d node_modules ]]; then
+  if [[ "${CI:-}" == "true" || ! -d node_modules ]]; then
     npm ci
   fi
 else
@@ -14,5 +14,5 @@ else
   fi
 fi
 
-cd "$repo_root/src-tauri"
-cargo tauri build
+cd "$repo_root"
+npm --prefix frontend exec tauri -- build --ci "$@"

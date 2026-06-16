@@ -55,23 +55,12 @@ impl AppState {
         let events = EventBus::new();
         events.spawn_tauri_emitter(app.clone());
 
-        let cfg = load_session_config(&app).await;
-        let (initial_mode, initial_state_path, initial_db_path) = if let Some(p) = cfg
-            .last_project_path
-            .as_deref()
-            .map(PathBuf::from)
-            .filter(|p| p.exists())
-        {
-            (ProjectMode::Project, Some(p.clone()), p)
-        } else {
-            let p = temp_project_db_path();
-            (ProjectMode::Temporary, None, p)
-        };
+        let initial_db_path = temp_project_db_path();
         let store0 = Arc::new(SqliteStore::open_at(initial_db_path).await?);
         let store = StoreHandle::new(store0);
         let project = Arc::new(RwLock::new(ProjectState {
-            mode: initial_mode,
-            path: initial_state_path,
+            mode: ProjectMode::Temporary,
+            path: None,
         }));
 
         let settings = Arc::new(SettingsManager::new(store.clone()));

@@ -94,25 +94,25 @@ Platform notes:
 
 From the repository root:
 
-1. Install frontend dependencies:
-   - `cd frontend`
-   - `npm install`
-2. Build and run via Tauri:
-   - `cd ..\src-tauri` on Windows, or `cd ../src-tauri` on macOS and Linux
+- `npm --prefix frontend install`
+
+The Tauri CLI is installed as a frontend dev dependency. You do not need the global `cargo tauri` command.
 
 ### Development build
 
-From `src-tauri`:
+From the repository root:
 
-- `cargo tauri dev`
+- `npm run dev`
 
 This starts the Next.js dev server and launches the Tauri app window.
 
+Do not use `cargo run` for normal app development. `cargo run` starts only the Rust shell and expects the frontend dev server to already be available at `http://localhost:3000`, so it can fail with `Could not connect to localhost: Connection refused`.
+
 ### Production build
 
-From `src-tauri`:
+From the repository root:
 
-- `cargo tauri build`
+- `npm run build`
 
 This builds the frontend, exports it to `frontend/out`, and builds a native app.
 
@@ -130,7 +130,7 @@ On Windows, the build produces:
 
 If you only want the portable executable and you do not want an installer:
 
-- `cargo tauri build --no-bundle`
+- `npm run build:no-bundle`
 
 #### macOS output
 
@@ -145,7 +145,20 @@ On Linux, the build produces:
 
 #### Building for every OS
 
-`cargo tauri build` builds for the operating system you run it on. To produce Windows, macOS, and Linux artifacts, you must build on each OS, or use CI with a matrix that builds on Windows, macOS, and Linux.
+`npm run build` builds for the operating system you run it on. To produce Windows, macOS, and Linux artifacts, you must build on each OS, or use CI with a matrix that builds on Windows, macOS, and Linux.
+
+### Docker build
+
+The Dockerfile builds Linux release artifacts in a clean container:
+
+- `docker build -t proxer-build .`
+
+For an interactive build environment:
+
+- `docker build -f Dockerfile.dev -t proxer-dev .`
+- `docker run --rm -it -v "$PWD:/workspace" proxer-dev`
+
+Docker is intended for Linux builds and checks. It is not the recommended way to launch the desktop UI interactively.
 
 ## Data and privacy
 

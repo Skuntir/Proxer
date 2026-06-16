@@ -89,7 +89,7 @@ impl TlsManager {
         *lock = Some(Arc::new(ca));
         self.leaf_cache.clear();
 
-        Ok(self.ca_info().await.ok_or_else(|| AppError::Other("failed to store CA".into()))?)
+        self.ca_info().await.ok_or_else(|| AppError::Other("failed to store CA".into()))
     }
 
     pub async fn import_ca_pem(&self, cert_pem: &str, key_pem: &str) -> Result<CaInfo> {
@@ -105,7 +105,7 @@ impl TlsManager {
         let mut lock = self.ca.write().await;
         *lock = Some(Arc::new(ca));
         self.leaf_cache.clear();
-        Ok(self.ca_info().await.ok_or_else(|| AppError::Other("failed to store CA".into()))?)
+        self.ca_info().await.ok_or_else(|| AppError::Other("failed to store CA".into()))
     }
 
     pub async fn server_config_for_host(&self, host: &str) -> Result<Arc<ServerConfig>> {

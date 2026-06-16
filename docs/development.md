@@ -22,21 +22,24 @@ From the repository root:
 
 1. Install frontend dependencies:
 
-   - `cd frontend`
-   - `npm install`
+   - `npm --prefix frontend install`
 
-2. Return to the repository root:
-
-   - `cd ..`
+The Tauri CLI is installed through the frontend dev dependencies. You do not need to install the global Rust command with `cargo install tauri-cli`.
 
 ## Run in development mode
 
-From `src-tauri`:
+From the repository root:
 
-- Windows: `cd src-tauri` then `cargo tauri dev`
-- macOS and Linux: `cd src-tauri` then `cargo tauri dev`
+- `npm run dev`
 
 This starts the Next.js dev server and launches the Tauri app.
+
+Do not use `cargo run` for normal development. It starts only the Rust side of the Tauri app and expects the frontend dev server to already be listening on `http://localhost:3000`. If the frontend is not running, `cargo run` can fail with `Could not connect to localhost: Connection refused`.
+
+If you need to pass arguments directly to the Tauri CLI, use:
+
+- `npm run tauri -- dev`
+- `npm run tauri -- build --no-bundle`
 
 ## Frontend only development
 
@@ -53,13 +56,32 @@ Some features require the Tauri backend, such as proxy capture, settings persist
 
 Frontend build:
 
-- `cd frontend`
-- `npm run build`
+- `npm run frontend:build`
+
+Frontend type check:
+
+- `npm run frontend:typecheck`
 
 Backend build check:
 
-- `cd src-tauri`
-- `cargo check`
+- `npm run backend:check`
+
+Combined check:
+
+- `npm run check`
+
+## Docker build environment
+
+To build Linux release artifacts in Docker:
+
+- `docker build -t proxer-build .`
+
+To open a reusable development container shell:
+
+- `docker build -f Dockerfile.dev -t proxer-dev .`
+- `docker run --rm -it -v "$PWD:/workspace" proxer-dev`
+
+The Docker image is for Linux builds and checks. Launching the desktop app from inside Docker requires extra host display and WebKit setup, so local `npm run dev` is the normal development path.
 
 ## Project data location
 
@@ -76,4 +98,3 @@ If you need a clean state, you can clear traffic from the UI, or you can remove 
 
 - If you see only CONNECT tunnels for HTTPS, enable SSL Interception and install the exported CA certificate.
 - If other apps pause when Intercept is enabled, narrow your scope regex, or disable the system proxy.
-
