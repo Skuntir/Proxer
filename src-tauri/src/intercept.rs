@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use tokio::sync::{oneshot, RwLock};
+use uuid::Uuid;
 
 use serde::Serialize;
 
@@ -123,6 +124,44 @@ impl InterceptManager {
             .collect::<Vec<_>>();
         out.sort_by_key(|i| i.ts_ms);
         out
+    }
+
+    pub async fn pause_ws_frame(&self, raw: String) -> Result<Option<InterceptDecision>> {
+        if !self.is_enabled().await {
+            return Ok(None);
+        }
+
+        let id = Uuid::new_v4().to_string();
+        if self.pending.len() > 256 {
+            return Ok(None);
+        }
+
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(id.clone(), tx);
+        self.queue.insert(
+            id.clone(),
+            InterceptQueueItem {
+                ts_ms: crate::events::now_ms(),
+                interception_id: id.clone(),
+                request_id: id.clone(),
+                raw: raw.clone(),
+                kind: "ws-message".into(),
+            },
+        );
+
+        self.events.emit(BackendEvent::InterceptPaused {
+            ts_ms: crate::events::now_ms(),
+            interception_id: id.clone(),
+            request_id: id.clone(),
+            raw,
+        });
+
+        let decision = match rx.await {
+            Ok(d) => Ok(Some(d)),
+            Err(_) => Ok(None),
+        };
+        self.queue.remove(&id);
+        decision
     }
 }
 

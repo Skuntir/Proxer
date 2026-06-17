@@ -1160,129 +1160,180 @@ const compactCount = (value: number | undefined) => {
   return String(safe)
 }
 
-const attackSurfaceNodeIcon = (kind: string) =>
-  kind === 'root' || kind === 'domain' || kind === 'host'
-    ? '◎'
-    : kind === 'category'
-      ? '▣'
-      : kind === 'summary'
-        ? '+'
-        : kind === 'port'
-          ? '◧'
-          : kind === 'leak'
-            ? '!'
-            : kind === 'tech'
-              ? '◆'
-              : '⌘'
+const attackSurfaceNodeIcon = (kind: string) => {
+  if (kind === 'domain') return '🌐'
+  if (kind === 'host') return '⬡'
+  if (kind === 'category') return '▤'
+  if (kind === 'summary') return '⋯'
+  if (kind === 'port') return '◈'
+  if (kind === 'leak') return '⚠'
+  if (kind === 'tech') return '◆'
+  if (kind === 'api') return '⌁'
+  if (kind === 'auth') return '⚷'
+  if (kind === 'interesting') return '◉'
+  return '◧'
+}
+
+const nodeAccent: Record<string, string> = {
+  domain:      'from-slate-700/60 to-slate-800/80 border-slate-500/60',
+  host:        'bg-card border-cyan-500/40',
+  category:    'bg-muted/50 border-border/70',
+  summary:     'bg-transparent border-dashed border-muted-foreground/30',
+  port:        'bg-muted/30 border-border/50',
+  tech:        'bg-teal-500/8 border-teal-500/30',
+  api:         'bg-blue-500/8 border-blue-500/35',
+  auth:        'bg-amber-500/8 border-amber-500/35',
+  interesting: 'bg-violet-500/8 border-violet-500/35',
+  endpoint:    'bg-card border-border/60',
+  leak:        'bg-red-500/10 border-red-500/50',
+}
+
+const nodeAccentBar: Record<string, string> = {
+  domain:      '',
+  host:        'bg-cyan-500',
+  api:         'bg-blue-500',
+  auth:        'bg-amber-500',
+  interesting: 'bg-violet-500',
+  tech:        'bg-teal-500',
+  leak:        'bg-red-500',
+  endpoint:    'bg-muted-foreground/40',
+}
+
+const nodeLabelColor: Record<string, string> = {
+  domain: 'text-slate-100',
+  leak:   'text-red-300',
+  api:    'text-blue-300',
+  auth:   'text-amber-300',
+  interesting: 'text-violet-300',
+  tech:   'text-teal-300',
+}
 
 function AttackSurfaceFlowNode({ data, selected }: NodeProps<FlowNode<AttackFlowNodeData>>) {
   const kind = data.kind
   const meta = data.meta
   const stats = data.stats
+  const isDomain = kind === 'domain'
+  const isHost = kind === 'host'
+  const isSummary = kind === 'summary'
+  const isLeak = kind === 'leak'
+  const hasBar = Boolean(nodeAccentBar[kind])
+
   const statusBits = stats
-    ? [
-        ['2xx', stats.success ?? 0, 'text-status-success'],
-        ['3xx', stats.redirects ?? 0, 'text-status-redirect'],
-        ['4xx', stats.clientErrors ?? 0, 'text-status-client-error'],
-        ['5xx', stats.serverErrors ?? 0, 'text-status-server-error'],
-      ].filter(([, count]) => Number(count) > 0)
+    ? ([
+        ['2xx', stats.success ?? 0, 'text-emerald-400'],
+        ['3xx', stats.redirects ?? 0, 'text-sky-400'],
+        ['4xx', stats.clientErrors ?? 0, 'text-amber-400'],
+        ['5xx', stats.serverErrors ?? 0, 'text-red-400'],
+      ] as const).filter(([, c]) => Number(c) > 0)
     : []
+
+  const baseClass = selected
+    ? 'border-primary bg-primary/20 ring-1 ring-primary/60'
+    : isDomain
+      ? 'bg-gradient-to-br ' + (nodeAccent[kind] ?? '')
+      : (nodeAccent[kind] ?? 'bg-card border-border')
+
   return (
     <div
       title={data.label}
       className={cn(
-        'relative min-w-0 rounded-md border px-2 py-1.5 text-xs shadow-md',
-        selected
-          ? 'border-primary bg-primary text-primary-foreground'
-          : kind === 'domain'
-            ? 'border-foreground bg-foreground text-background'
-            : kind === 'host'
-              ? 'border-border bg-card text-foreground'
-              : kind === 'category'
-                ? 'border-border bg-muted/60 text-foreground'
-                : kind === 'summary'
-                  ? 'border-dashed border-muted-foreground/35 bg-muted/25 text-muted-foreground'
-                  : kind === 'leak'
-                    ? 'border-destructive/55 bg-destructive/15 text-foreground'
-                    : kind === 'tech'
-                      ? 'border-dashed border-border bg-muted/30 text-foreground'
-                      : ['api', 'auth', 'interesting'].includes(kind)
-                        ? 'border-primary/30 bg-primary/10 text-foreground'
-                        : 'border-border bg-card text-foreground'
+        'relative min-w-0 overflow-hidden rounded-lg border text-xs shadow-lg transition-shadow hover:shadow-xl',
+        baseClass
       )}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!h-2 !w-2 !border-border !bg-foreground !opacity-70"
-        isConnectable={false}
-      />
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!h-2 !w-2 !border-border !bg-foreground !opacity-70"
-        isConnectable={false}
-      />
-      <div className="flex items-start gap-2">
-        <span className={cn('shrink-0 text-[12px]', selected ? 'text-primary-foreground' : kind === 'domain' ? 'text-background/60' : 'text-muted-foreground')}>
-          {data.icon}
-        </span>
-        <div className="min-w-0 flex-1">
-          {meta ? (
-            <>
-              <div className={cn('break-words text-[11px] font-semibold', selected ? 'text-primary-foreground' : 'text-foreground')}>{meta.title}</div>
-              <div className="mt-0.5 space-y-0.5">
-                {meta.items.map((item) => (
-                  <div key={item} className={cn('break-words text-[10px] leading-3', selected ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
-                    {item}
+      <Handle type="target" position={Position.Left} className="!h-1.5 !w-1.5 !border-0 !bg-foreground/30" isConnectable={false} />
+      <Handle type="source" position={Position.Right} className="!h-1.5 !w-1.5 !border-0 !bg-foreground/30" isConnectable={false} />
+
+      {/* Accent bar for non-domain nodes */}
+      {hasBar && !isDomain && (
+        <div className={cn('absolute left-0 top-0 h-full w-[3px]', nodeAccentBar[kind])} />
+      )}
+
+      <div className={cn('px-3 py-2', hasBar && !isDomain && 'pl-4')}>
+        {/* Header row */}
+        <div className="flex items-start gap-1.5">
+          <span className={cn(
+            'mt-px shrink-0 text-[11px] leading-none',
+            isDomain ? 'text-slate-300' : 'text-muted-foreground'
+          )}>
+            {data.icon ?? attackSurfaceNodeIcon(kind)}
+          </span>
+          <div className="min-w-0 flex-1">
+            {meta ? (
+              <>
+                <div className={cn('text-[11px] font-semibold leading-tight', selected ? 'text-primary-foreground' : 'text-foreground')}>
+                  {meta.title}
+                </div>
+                <div className="mt-1 space-y-0.5">
+                  {meta.items.map((item) => (
+                    <div key={item} className="text-[10px] leading-[1.3] text-muted-foreground break-words">{item}</div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={cn(
+                  'font-semibold leading-tight',
+                  isDomain ? 'text-[13px] text-slate-100' : isHost ? 'text-[12px] text-foreground' : 'text-[11px]',
+                  isDomain || isHost ? 'truncate' : 'break-words',
+                  !isDomain && !isHost && (nodeLabelColor[kind] ?? 'text-foreground')
+                )}>
+                  {data.label}
+                </div>
+                {data.subtitle && (
+                  <div className={cn('mt-0.5 break-words text-[10px] leading-[1.3]', isDomain ? 'text-slate-400' : 'text-muted-foreground')}>
+                    {data.subtitle}
                   </div>
+                )}
+              </>
+            )}
+
+            {/* Facts row */}
+            {!!data.facts?.length && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {data.facts.slice(0, 4).map((fact) => (
+                  <span key={fact} className="rounded bg-foreground/8 px-1 py-px text-[9px] text-muted-foreground">{fact}</span>
                 ))}
               </div>
-            </>
-          ) : (
-            <>
-              <div className={cn('text-[11px] font-semibold', kind === 'domain' || kind === 'host' ? 'truncate' : 'break-words')}>{data.label}</div>
-              {data.subtitle && (
-                <div className={cn('mt-0.5 break-words text-[10px] leading-3', selected ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
-                  {data.subtitle}
-                </div>
-              )}
-            </>
-          )}
-          {!!data.facts?.length && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {data.facts.slice(0, 4).map((fact) => (
-                <Badge key={fact} variant="secondary" className="h-4 max-w-full px-1 text-[9px]">
-                  <span className="truncate">{fact}</span>
-                </Badge>
-              ))}
-            </div>
-          )}
-          {stats && (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              <Badge variant="outline" className="h-4 px-1 text-[9px]">{compactCount(stats.requests)} req</Badge>
-              <Badge variant="outline" className="h-4 px-1 text-[9px]">{compactCount(stats.endpoints)} paths</Badge>
-              {(stats.schemes ?? []).slice(0, 2).map((scheme) => (
-                <Badge key={scheme} variant="secondary" className="h-4 px-1 text-[9px]">{scheme}</Badge>
-              ))}
-              {statusBits.map(([label, count, cls]) => (
-                <Badge key={String(label)} variant="outline" className={cn('h-4 px-1 text-[9px]', cls as string)}>
-                  {label}:{count}
-                </Badge>
-              ))}
-            </div>
+            )}
+
+            {/* Stats row (host/domain) */}
+            {stats && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-[9px] font-mono text-muted-foreground">{compactCount(stats.requests)}r</span>
+                <span className="text-[9px] font-mono text-muted-foreground">{compactCount(stats.endpoints)}p</span>
+                {statusBits.map(([label, count, cls]) => (
+                  <span key={label} className={cn('text-[9px] font-mono font-semibold', cls)}>{label}:{count}</span>
+                ))}
+                {isHost && (stats.schemes ?? []).slice(0, 2).map((s) => (
+                  <span key={s} className="rounded border border-border/50 px-1 py-px text-[8px] text-muted-foreground">{s.toUpperCase()}</span>
+                ))}
+              </div>
+            )}
+
+            {/* Leak severity */}
+            {isLeak && meta && (
+              <span className="mt-1 inline-block rounded border border-red-500/40 bg-red-500/15 px-1 py-px text-[9px] font-semibold text-red-400">
+                {meta.title}
+              </span>
+            )}
+
+            {/* Summary indicator */}
+            {isSummary && (
+              <div className="text-[10px] text-muted-foreground/70 italic">{data.label}</div>
+            )}
+          </div>
+
+          {/* Collapse toggle */}
+          {data.hasChildren && (
+            <span className={cn(
+              'ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[9px] font-bold',
+              selected ? 'border-primary-foreground/40 text-primary-foreground' : 'border-border/70 text-muted-foreground'
+            )}>
+              {data.isCollapsed ? '+' : '−'}
+            </span>
           )}
         </div>
-        {data.hasChildren && (
-          <span
-            className={cn(
-              'ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]',
-              selected ? 'border-primary-foreground/30 text-primary-foreground/80' : 'border-border text-muted-foreground'
-            )}
-          >
-            {data.isCollapsed ? '+' : '-'}
-          </span>
-        )}
       </div>
     </div>
   )
@@ -1959,50 +2010,40 @@ export function AttackSurfaceView() {
               style={{ zIndex: 1 }}
             >
               {canvas.lines.map((line) => {
-                const strong = line.relation === 'leaks' || line.relation === 'serves' || line.relation === 'inventory'
+                const isLeak = line.relation === 'leaks'
+                const isServe = line.relation === 'serves'
+                const isInventory = line.relation === 'inventory'
+                const stroke = isLeak ? 'rgb(239 68 68 / 0.55)' : isServe ? 'rgb(59 130 246 / 0.45)' : isInventory ? 'rgb(100 116 139 / 0.55)' : 'hsl(var(--foreground) / 0.22)'
+                const w = isLeak ? 1.5 : isServe || isInventory ? 1.25 : 1
                 return (
                   <g key={line.id}>
-                    <path
-                      d={line.path}
-                      fill="none"
-                      stroke="hsl(var(--background))"
-                      strokeWidth={strong ? 5 : 4}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      opacity={0.82}
-                    />
-                    <path
-                      d={line.path}
-                      fill="none"
-                      stroke="hsl(var(--foreground))"
-                      strokeWidth={strong ? 2 : 1.5}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      opacity={strong ? 0.82 : 0.68}
-                    />
+                    <path d={line.path} fill="none" stroke="hsl(var(--background))" strokeWidth={w + 3} strokeLinecap="round" strokeLinejoin="round" opacity={0.7} />
+                    <path d={line.path} fill="none" stroke={stroke} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={isLeak ? '4 3' : undefined} />
                   </g>
                 )
               })}
             </svg>
           </ViewportPortal>
-          <Background gap={22} size={1} color="hsl(var(--muted-foreground) / 0.32)" />
+          <Background gap={28} size={0.5} color="hsl(var(--muted-foreground) / 0.18)" />
           <MiniMap
             pannable
             zoomable
-            nodeStrokeWidth={2}
-            className="!bg-card !border !border-border"
+            nodeStrokeWidth={0}
+            maskColor="hsl(var(--background) / 0.7)"
+            className="!bg-card/90 !border !border-border !rounded-lg overflow-hidden"
             nodeColor={(node) => {
-              const data = node.data as AttackFlowNodeData | undefined
-              return data?.kind === 'domain'
-                ? 'hsl(var(--foreground))'
-                : data?.kind === 'leak'
-                  ? 'hsl(var(--destructive))'
-                  : data?.kind === 'category'
-                    ? 'hsl(var(--muted))'
-                    : 'hsl(var(--card))'
+              const d = node.data as AttackFlowNodeData | undefined
+              if (d?.kind === 'domain') return 'rgb(100 116 139)'
+              if (d?.kind === 'host') return 'rgb(6 182 212 / 0.6)'
+              if (d?.kind === 'leak') return 'rgb(239 68 68 / 0.7)'
+              if (d?.kind === 'api') return 'rgb(59 130 246 / 0.5)'
+              if (d?.kind === 'auth') return 'rgb(245 158 11 / 0.5)'
+              if (d?.kind === 'interesting') return 'rgb(139 92 246 / 0.5)'
+              if (d?.kind === 'tech') return 'rgb(20 184 166 / 0.4)'
+              return 'hsl(var(--muted))'
             }}
           />
-          <Controls className="!bg-card !border !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-foreground" />
+          <Controls className="!bg-card/90 !border !border-border !rounded-lg [&_button]:!bg-transparent [&_button]:!border-0 [&_button]:!text-muted-foreground [&_button:hover]:!text-foreground [&_button:hover]:!bg-muted/50" />
         </ReactFlow>
       </div>
 
@@ -2014,130 +2055,148 @@ export function AttackSurfaceView() {
       </div>
 
       <aside className={cn(
-        'z-20 flex min-h-0 flex-col border-l border-border bg-card/95 text-xs transition-[width]',
-        surfaceSidebarCollapsed ? 'items-center overflow-hidden p-2' : 'gap-4 overflow-auto p-4'
+        'z-20 flex min-h-0 flex-col border-l border-border bg-card/95 backdrop-blur-sm text-xs transition-[width]',
+        surfaceSidebarCollapsed ? 'items-center overflow-hidden p-2' : 'overflow-auto'
       )}>
-        <Button
-          variant="outline"
-          size="sm"
-          className={cn('h-8 border-border bg-background', surfaceSidebarCollapsed ? 'w-8 rounded-full p-0' : 'w-full justify-between rounded-md px-2')}
-          onClick={() => setSurfaceSidebarCollapsed((prev) => !prev)}
-          title={surfaceSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {!surfaceSidebarCollapsed && <span className="text-xs">Panel</span>}
-          {surfaceSidebarCollapsed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        </Button>
-        {!surfaceSidebarCollapsed && (
-          <>
-        <div>
-          <div className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Filter</div>
-          <div className="space-y-1">
-            {[
-              ['all', 'All Nodes'],
-              ['domain', 'Domains'],
-              ['host', 'Subdomains'],
-              ['category', 'Categories'],
-              ['summary', 'More Nodes'],
-              ['port', 'Ports'],
-              ['tech', 'Tech'],
-              ['api', 'API Endpoints'],
-              ['endpoint', 'Endpoints'],
-              ['leak', 'API Leaks'],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setNodeFilter(id)}
-                className={cn(
-                  'flex h-7 w-full items-center rounded-md px-2 text-left transition-colors',
-                  nodeFilter === id ? 'text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="border-t border-border pt-4">
-          <div className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Node Types</div>
-          <div className="grid grid-cols-2 gap-2 text-xs text-foreground">
-            {[
-              ['◎', 'Root'],
-              ['◎', 'Domains'],
-              ['◎', 'Subdomains'],
-              ['▣', 'Categories'],
-              ['+', 'More Nodes'],
-              ['◧', 'Ports'],
-              ['⌘', 'Endpoints'],
-              ['◆', 'Tech'],
-              ['!', 'Leaks'],
-            ].map(([icon, label]) => (
-              <div key={label} className="flex items-center gap-2 rounded bg-muted/40 px-2 py-1.5">
-                <span className="w-4 text-muted-foreground">{icon}</span>
-                <span>{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="border-t border-border pt-4">
-        {selectedNode ? (
-          <>
-          <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{selectedNode.kind}</div>
-          <div className="break-all font-mono text-sm font-semibold text-foreground">{selectedNode.label}</div>
-          {canvas.collapsibleIds.has(selectedNode.id) && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-3 h-8 w-full rounded-md border-border bg-background text-xs"
-              onClick={() => toggleCollapse(selectedNode.id)}
-            >
-              {collapsed.has(selectedNode.id) ? 'Expand node' : 'Collapse node'}
-            </Button>
-          )}
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <div className="rounded-md bg-muted/50 p-2">
-              <div className="text-muted-foreground">Weight</div>
-              <div className="font-mono text-foreground">{selectedNode.weight}</div>
-            </div>
-            {selectedHost && (
-              <div className="rounded-md bg-muted/50 p-2">
-                <div className="text-muted-foreground">Endpoints</div>
-                <div className="font-mono text-foreground">{selectedHost.endpoints}</div>
-              </div>
-            )}
-          </div>
-          {selectedLeak && (
-            <div className="mt-3 space-y-2">
-              <Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-destructive">{selectedLeak.severity}</Badge>
-              <div className="rounded bg-muted/50 px-2 py-1 font-mono">{selectedLeak.evidence}</div>
-              <div className="break-all text-muted-foreground">{selectedLeak.url}</div>
-            </div>
-          )}
-          {selectedHost && (
-            <div className="mt-3 space-y-3">
-              <div>
-                <div className="mb-1 text-muted-foreground">Methods</div>
-                <div className="flex flex-wrap gap-1">{selectedHost.methods.map((m) => <Badge key={m} variant="outline">{m}</Badge>)}</div>
-              </div>
-              <div>
-                <div className="mb-1 text-muted-foreground">Ports</div>
-                <div className="flex flex-wrap gap-1">{selectedHost.ports.map((p) => <Badge key={p} variant="secondary">{p}</Badge>)}</div>
-              </div>
-              <div>
-                <div className="mb-1 text-muted-foreground">API Endpoints</div>
-                <div className="space-y-1">{(selectedHost.apiPaths.length ? selectedHost.apiPaths : selectedHost.endpointPaths).slice(0, 5).map((p) => <div key={p} className="truncate rounded bg-muted/50 px-2 py-1 font-mono">{p}</div>)}</div>
-              </div>
-            </div>
-          )}
-          </>
+        {surfaceSidebarCollapsed ? (
+          <Button variant="ghost" size="sm" className="h-8 w-8 rounded-full p-0 mt-1" onClick={() => setSurfaceSidebarCollapsed(false)} title="Expand panel">
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-center text-muted-foreground">
-            Select a node to inspect its attack surface details.
-          </div>
-        )}
-        </div>
+          <>
+            {/* Panel header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Surface Panel</span>
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground" onClick={() => setSurfaceSidebarCollapsed(true)}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+
+            {/* Filter section */}
+            <div className="px-4 pt-4 pb-3 border-b border-border/40">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Filter by type</div>
+              <div className="space-y-0.5">
+                {([
+                  ['all',         '◈ All nodes'],
+                  ['domain',      '🌐 Domains'],
+                  ['host',        '⬡ Subdomains'],
+                  ['api',         '⌁ API endpoints'],
+                  ['auth',        '⚷ Auth paths'],
+                  ['interesting', '◉ Interesting'],
+                  ['endpoint',    '◧ Endpoints'],
+                  ['tech',        '◆ Technologies'],
+                  ['port',        '◈ Ports'],
+                  ['leak',        '⚠ API leaks'],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setNodeFilter(id)}
+                    className={cn(
+                      'flex h-7 w-full items-center gap-2 rounded-md px-2 text-[11px] text-left transition-colors',
+                      nodeFilter === id
+                        ? 'bg-primary/15 text-foreground font-medium'
+                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Selected node detail */}
+            <div className="flex-1 overflow-auto px-4 pt-4 pb-4">
+              {selectedNode ? (
+                <div className="space-y-3">
+                  <div>
+                    <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{selectedNode.kind}</div>
+                    <div className="break-all font-mono text-[12px] font-semibold text-foreground leading-tight">{selectedNode.label}</div>
+                  </div>
+
+                  {canvas.collapsibleIds.has(selectedNode.id) && (
+                    <Button size="sm" variant="outline" className="h-7 w-full text-[11px] border-border bg-muted/30" onClick={() => toggleCollapse(selectedNode.id)}>
+                      {collapsed.has(selectedNode.id) ? '+ Expand children' : '− Collapse children'}
+                    </Button>
+                  )}
+
+                  {selectedHost && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          ['Requests', compactCount(selectedHost.requests)],
+                          ['Endpoints', compactCount(selectedHost.endpoints)],
+                          ['Success', compactCount(selectedHost.success ?? 0)],
+                          ['Errors', compactCount((selectedHost.clientErrors ?? 0) + (selectedHost.serverErrors ?? 0))],
+                        ].map(([label, val]) => (
+                          <div key={label} className="rounded-md bg-muted/40 px-2.5 py-2">
+                            <div className="text-[9px] text-muted-foreground uppercase tracking-wider">{label}</div>
+                            <div className="font-mono text-[12px] font-semibold text-foreground">{val}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {selectedHost.methods.length > 0 && (
+                        <div>
+                          <div className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Methods</div>
+                          <div className="flex flex-wrap gap-1">
+                            {selectedHost.methods.map((m) => (
+                              <span key={m} className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-foreground">{m}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {selectedHost.ports.length > 0 && (
+                        <div>
+                          <div className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Open ports</div>
+                          <div className="flex flex-wrap gap-1">
+                            {selectedHost.ports.map((p) => (
+                              <span key={p} className="rounded border border-cyan-500/30 bg-cyan-500/8 px-1.5 py-0.5 font-mono text-[10px] text-cyan-400">{p}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {selectedHost.technologies.length > 0 && (
+                        <div>
+                          <div className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Technologies</div>
+                          <div className="flex flex-wrap gap-1">
+                            {selectedHost.technologies.slice(0, 12).map((t) => (
+                              <span key={t} className="rounded border border-teal-500/30 bg-teal-500/8 px-1.5 py-0.5 text-[10px] text-teal-400">{t}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {(selectedHost.apiPaths.length > 0 || selectedHost.endpointPaths.length > 0) && (
+                        <div>
+                          <div className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Top paths</div>
+                          <div className="space-y-1">
+                            {(selectedHost.apiPaths.length ? selectedHost.apiPaths : selectedHost.endpointPaths).slice(0, 8).map((p) => (
+                              <div key={p} className="truncate rounded bg-muted/40 px-2 py-1 font-mono text-[10px] text-foreground">{p}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {selectedLeak && (
+                    <div className="space-y-2">
+                      <span className="inline-block rounded border border-red-500/40 bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-400">
+                        {selectedLeak.severity}
+                      </span>
+                      <div className="rounded bg-muted/50 px-2 py-1.5 font-mono text-[10px] text-foreground break-all">{selectedLeak.evidence}</div>
+                      <div className="break-all text-[10px] text-muted-foreground">{selectedLeak.url}</div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex h-32 items-center justify-center text-center text-muted-foreground/60">
+                  <div>
+                    <div className="text-2xl mb-2">◎</div>
+                    <div className="text-[11px]">Click a node to inspect</div>
+                  </div>
+                </div>
+              )}
+            </div>
           </>
         )}
       </aside>
@@ -2319,7 +2378,7 @@ export function ProxyView({
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">Use System Proxy</p>
-                <p className="text-xs text-muted-foreground">Routes Windows HTTP/HTTPS through Proxer</p>
+                <p className="text-xs text-muted-foreground">Routes system HTTP/HTTPS through Proxer</p>
               </div>
               <Switch
                 checked={Boolean(settings?.systemProxyEnabled)}
@@ -2523,7 +2582,7 @@ export function ProxyView({
               <Textarea
                 className="font-mono text-xs h-20"
                 placeholder=".*\\.example\\.com$&#10;.*\\/api\\/.*"
-                value={settings?.scopeRegex ?? '^$'}
+                value={settings?.scopeRegex ?? '.*'}
                 onChange={(e) => {
                   settingsSet({ scopeRegex: e.target.value })
                     .then((s) => setSettingsState(s))
@@ -3588,6 +3647,28 @@ export function InterceptView({
     }
   }
 
+  const forwardAll = async () => {
+    if (busy) return
+    const items = [...queue]
+    setBusy(true)
+    for (const item of items) {
+      try { await interceptForward(item.interceptionId) } catch { /* swallow */ }
+      removeFromQueue(item.interceptionId)
+    }
+    setBusy(false)
+  }
+
+  const dropAll = async () => {
+    if (busy) return
+    const items = [...queue]
+    setBusy(true)
+    for (const item of items) {
+      try { await interceptDrop(item.interceptionId) } catch { /* swallow */ }
+      removeFromQueue(item.interceptionId)
+    }
+    setBusy(false)
+  }
+
   useEffect(() => {
     const onHotkey = (ev: Event) => {
       const e = ev as CustomEvent
@@ -3598,131 +3679,212 @@ export function InterceptView({
     return () => window.removeEventListener('skuntir:hotkey', onHotkey)
   }, [active, busy, editedRaw])
 
+  const parseQueueItem = (item: InterceptQueueItem) => {
+    if (item.kind === 'ws-message') {
+      const dir = item.raw.startsWith('→') ? '→' : '←'
+      const text = item.raw.replace(/^[→←]\s*/, '').replace(/^\[binary\]\s*/, '')
+      return { method: 'WS', path: text.slice(0, 80), host: dir === '→' ? 'client → server' : 'server → client', isWs: true }
+    }
+    const firstLine = item.raw.split(/\r?\n/, 1)[0] ?? ''
+    const parts = firstLine.split(' ')
+    const method = parts[0] ?? 'GET'
+    const rawUrl = parts[1] ?? '/'
+    let path = rawUrl
+    let host = item.raw.match(/^host:\s*(.+)$/im)?.[1]?.trim() ?? ''
+    try {
+      if (rawUrl.startsWith('http')) {
+        const u = new URL(rawUrl)
+        path = u.pathname + u.search
+        if (!host) host = u.host
+      }
+    } catch { /* ignore */ }
+    return { method, path: path.slice(0, 100), host, isWs: false }
+  }
+
+  const methodColor = (method: string) => {
+    switch (method.toUpperCase()) {
+      case 'GET':    return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+      case 'POST':   return 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+      case 'PUT':    return 'bg-violet-500/20 text-violet-400 border-violet-500/30'
+      case 'PATCH':  return 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+      case 'DELETE': return 'bg-red-500/20 text-red-400 border-red-500/30'
+      case 'WS':     return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+      default:       return 'bg-muted text-muted-foreground border-border'
+    }
+  }
+
   return (
     <div className="flex flex-col h-full bg-background">
-      <div className="p-4 border-b border-border flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button 
-            variant={interceptEnabled ? 'default' : 'outline'}
-            size="sm"
-            onClick={async () => {
-              onInterceptToggle(!interceptEnabled)
-            }}
-            className={interceptEnabled ? 'bg-destructive hover:bg-destructive/90' : ''}
-          >
-            {interceptEnabled ? (
-              <>
-                <Pause className="w-4 h-4 mr-2" />
-                Intercept is ON
-              </>
+      {/* Toolbar */}
+      <div className="px-3 py-2 border-b border-border flex items-center gap-2 flex-wrap">
+        <Button
+          variant={interceptEnabled ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => onInterceptToggle(!interceptEnabled)}
+          className={cn('font-mono text-xs', interceptEnabled ? 'bg-destructive hover:bg-destructive/90 text-destructive-foreground' : '')}
+        >
+          {interceptEnabled ? <Pause className="w-3.5 h-3.5 mr-1.5" /> : <Play className="w-3.5 h-3.5 mr-1.5" />}
+          {interceptEnabled ? 'Intercept ON' : 'Intercept OFF'}
+        </Button>
+
+        <div className="h-5 w-px bg-border mx-0.5" />
+
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!active || busy}
+          onClick={() => forwardActive().catch(() => {})}
+          className="border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40"
+        >
+          <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
+          Forward
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!active || busy}
+          onClick={() => dropActive().catch(() => {})}
+          className="border-red-500/50 text-red-400 hover:bg-red-500/10 disabled:opacity-40"
+        >
+          <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+          Drop
+        </Button>
+
+        {queue.length > 1 && (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => forwardAll().catch(() => {})}
+              className="text-xs text-muted-foreground hover:text-emerald-400"
+            >
+              Forward All ({queue.length})
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => dropAll().catch(() => {})}
+              className="text-xs text-muted-foreground hover:text-red-400"
+            >
+              Drop All
+            </Button>
+          </>
+        )}
+
+        {active && (
+          <>
+            <div className="h-5 w-px bg-border mx-0.5" />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs text-muted-foreground"
+              onClick={() => appNavigate('repeater', { rawRequest: editedRaw })}
+            >
+              <Send className="w-3.5 h-3.5 mr-1.5" />
+              Repeater
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs text-muted-foreground"
+              onClick={() => appNavigate('intruder', { templateRaw: editedRaw })}
+            >
+              <Zap className="w-3.5 h-3.5 mr-1.5" />
+              Intruder
+            </Button>
+          </>
+        )}
+
+        <div className="ml-auto flex items-center gap-2">
+          {queue.length > 0 && (
+            <Badge className="bg-destructive/20 text-destructive border border-destructive/40 font-mono text-[10px] animate-pulse gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-destructive inline-block" />
+              {queue.length} INTERCEPTED
+            </Badge>
+          )}
+          {interceptEnabled && queue.length === 0 && (
+            <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
+              Waiting...
+            </Badge>
+          )}
+          {!interceptEnabled && (
+            <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
+              Passthrough
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
+        {/* Queue sidebar — always visible */}
+        <div className="w-72 border-r border-border flex flex-col shrink-0 bg-muted/10">
+          <div className="px-3 py-1.5 border-b border-border/60 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+            Queue ({queue.length})
+          </div>
+          <div className="flex-1 overflow-auto">
+            {queue.length === 0 ? (
+              <div className="p-4 text-center text-xs text-muted-foreground/50 mt-6">
+                {interceptEnabled ? 'No paused requests' : 'Intercept is off'}
+              </div>
             ) : (
-              <>
-                <Play className="w-4 h-4 mr-2" />
-                Intercept is OFF
-              </>
+              queue.map((item) => {
+                const { method, path, host } = parseQueueItem(item)
+                const isSelected = active?.interceptionId === item.interceptionId
+                return (
+                  <button
+                    key={item.interceptionId}
+                    type="button"
+                    onClick={() => activateIntercept(item)}
+                    className={cn(
+                      'w-full border-b border-border/40 px-3 py-2.5 text-left hover:bg-muted/40 transition-colors',
+                      isSelected && 'bg-primary/10 border-l-2 border-l-primary'
+                    )}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={cn('text-[9px] font-bold px-1 py-0.5 rounded border font-mono', methodColor(method))}>
+                        {method}
+                      </span>
+                    </div>
+                    <div className="text-[11px] font-mono truncate text-foreground leading-tight">{path}</div>
+                    <div className="text-[10px] truncate text-muted-foreground mt-0.5">{host}</div>
+                  </button>
+                )
+              })
             )}
-          </Button>
-          {active && (
-            <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                disabled={busy}
-                onClick={() => forwardActive().catch(() => {})}
-              >
-                <ArrowUp className="w-4 h-4 mr-2" />
-                Forward
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                disabled={busy}
-                onClick={() => dropActive().catch(() => {})}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Drop
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => appNavigate('repeater', { rawRequest: editedRaw })}
-              >
-                <Send className="w-4 h-4 mr-2" />
-                Send to Repeater
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => appNavigate('intruder', { templateRaw: editedRaw })}
-              >
-                <Zap className="w-4 h-4 mr-2" />
-                Send to Intruder
-              </Button>
+          </div>
+        </div>
+
+        {/* Editor */}
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          {active ? (
+            <>
+              <div className="px-3 py-1 border-b border-border/60 bg-destructive/5 flex items-center gap-2 shrink-0">
+                <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
+                <span className="text-[10px] font-mono text-destructive font-semibold tracking-wider">INTERCEPTED</span>
+                <span className="text-[10px] text-muted-foreground font-mono ml-2 truncate">{active.interceptionId}</span>
+              </div>
+              <Textarea
+                className="flex-1 font-mono text-xs resize-none rounded-none border-0 focus-visible:ring-0 min-h-0"
+                value={editedRaw}
+                onChange={(e) => setEditedRaw(e.target.value)}
+              />
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-muted-foreground">
+              <div className="text-center">
+                <ShieldAlert className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="text-sm font-medium">No request intercepted</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">
+                  {interceptEnabled ? 'Waiting for incoming requests...' : 'Enable intercept to capture requests'}
+                </p>
+              </div>
             </div>
           )}
         </div>
-        <Badge variant="outline" className="gap-1.5">
-          <span className={cn(
-            'w-1.5 h-1.5 rounded-full',
-            interceptEnabled ? 'bg-destructive animate-pulse' : 'bg-muted-foreground'
-          )} />
-          {interceptEnabled ? (active ? `${queue.length} paused` : 'Waiting for request...') : 'Passthrough mode'}
-        </Badge>
-      </div>
-
-      <div className="flex-1 min-h-0 flex">
-        {queue.length > 0 && (
-          <div className="w-72 border-r border-border bg-muted/20 overflow-auto">
-            {queue.map((item, index) => {
-              const firstLine = item.raw.split(/\r?\n/, 1)[0] || 'Request'
-              return (
-                <button
-                  key={item.interceptionId}
-                  type="button"
-                  onClick={() => activateIntercept(item)}
-                  className={cn(
-                    'w-full border-b border-border/60 p-3 text-left text-xs hover:bg-muted/50',
-                    active?.interceptionId === item.interceptionId && 'bg-primary/10'
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-foreground">Paused #{queue.length - index}</span>
-                    <Badge variant="outline" className="text-[10px]">hold</Badge>
-                  </div>
-                  {item.kind === 'websocket' && (
-                    <Badge variant="secondary" className="mt-2 text-[10px]">websocket</Badge>
-                  )}
-                  <div className="mt-1 truncate font-mono text-muted-foreground">{firstLine}</div>
-                </button>
-              )
-            })}
-          </div>
-        )}
-
-        <div className="flex-1 p-4 min-w-0">
-          {active ? (
-            <Textarea
-              className="h-full font-mono text-xs resize-none"
-              value={editedRaw}
-              onChange={(e) => setEditedRaw(e.target.value)}
-            />
-        ) : (
-          <div className="h-full flex items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <ShieldAlert className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p className="text-sm font-medium">No request intercepted</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {interceptEnabled ? 'Waiting for incoming requests...' : 'Turn on intercept to capture requests'}
-              </p>
-            </div>
-          </div>
-        )}
-        </div>
-      </div>
-
-      <div className="p-3 border-t border-border bg-muted/30 flex items-center justify-between text-xs text-muted-foreground">
-        <span>{active ? `Interception: ${active.interceptionId}` : 'No active interception'}</span>
-        <span>{queue.length > 1 ? `${queue.length - 1} waiting behind this request` : ''}</span>
       </div>
     </div>
   )

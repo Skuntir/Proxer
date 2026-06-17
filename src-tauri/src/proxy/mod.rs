@@ -22,7 +22,6 @@ use hyper::{
     Method, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
-use regex::Regex;
 use sha1::{Digest, Sha1};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -464,50 +463,39 @@ impl ProxyService {
             body: body_bytes,
         };
 
-        let in_scope = self
-            .engine
-            .settings
-            .get()
-            .await
-            .ok()
-            .map(|s| host_in_scope(&host, &s.scope_regex))
-            .unwrap_or(true);
-
-        if in_scope {
-            if let Some(decision) = self.engine.intercept.pause_request(&proxy_req).await? {
-                match decision {
-                    InterceptDecision::Forward { edited_raw } => {
-                        if let Some(raw) = edited_raw {
-                            proxy_req = apply_raw_edit(proxy_req, &raw)?;
-                        }
+        if let Some(decision) = self.engine.intercept.pause_request(&proxy_req).await? {
+            match decision {
+                InterceptDecision::Forward { edited_raw } => {
+                    if let Some(raw) = edited_raw {
+                        proxy_req = apply_raw_edit(proxy_req, &raw)?;
                     }
-                    InterceptDecision::Drop => {
-                        let reason = "dropped by intercept".to_string();
-                        self.engine.events.emit(BackendEvent::RequestCaptured {
-                            ts_ms: started_ms,
-                            id: id.to_string(),
-                            method: proxy_req.method.clone(),
-                            url: proxy_req.url.clone(),
-                            host: proxy_req.host.clone(),
-                            scheme: proxy_req.scheme.clone(),
-                            request_bytes: proxy_req.body.len(),
-                            preview_base64: preview_b64(&proxy_req.body),
-                        });
-                        self.engine
-                            .persist_traffic(&proxy_req, None, Some(&reason))
-                            .await?;
-                        self.engine.events.emit(BackendEvent::ResponseReceived {
-                            ts_ms: now_ms(),
-                            id: id.to_string(),
-                            status: StatusCode::FORBIDDEN.as_u16(),
-                            response_bytes: reason.len(),
-                            preview_base64: preview_b64(reason.as_bytes()),
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                        });
-                        return Ok(Response::builder()
-                            .status(StatusCode::FORBIDDEN)
-                            .body(Full::new(Bytes::from(reason)))?);
-                    }
+                }
+                InterceptDecision::Drop => {
+                    let reason = "dropped by intercept".to_string();
+                    self.engine.events.emit(BackendEvent::RequestCaptured {
+                        ts_ms: started_ms,
+                        id: id.to_string(),
+                        method: proxy_req.method.clone(),
+                        url: proxy_req.url.clone(),
+                        host: proxy_req.host.clone(),
+                        scheme: proxy_req.scheme.clone(),
+                        request_bytes: proxy_req.body.len(),
+                        preview_base64: preview_b64(&proxy_req.body),
+                    });
+                    self.engine
+                        .persist_traffic(&proxy_req, None, Some(&reason))
+                        .await?;
+                    self.engine.events.emit(BackendEvent::ResponseReceived {
+                        ts_ms: now_ms(),
+                        id: id.to_string(),
+                        status: StatusCode::FORBIDDEN.as_u16(),
+                        response_bytes: reason.len(),
+                        preview_base64: preview_b64(reason.as_bytes()),
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                    });
+                    return Ok(Response::builder()
+                        .status(StatusCode::FORBIDDEN)
+                        .body(Full::new(Bytes::from(reason)))?);
                 }
             }
         }
@@ -649,11 +637,74 @@ impl ProxyService {
                     }
                 }
 
+                let intercept = self.engine.intercept.clone();
                 tokio::task::spawn_local(async move {
                     if let Ok(upgraded) = on_upgrade.await {
-                        let mut client = TokioIo::new(upgraded);
-                        let mut upstream = ws.stream;
-                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                        let (mut cr, mut cw) = tokio::io::split(TokioIo::new(upgraded));
+                        let (mut ur, mut uw) = tokio::io::split(ws.stream);
+                        let ic = intercept.clone();
+                        let c2s = tokio::task::spawn_local(async move {
+                            loop {
+                                let frame = match ws_read_frame(&mut cr).await {
+                                    Ok(f) => f,
+                                    Err(_) => break,
+                                };
+                                let is_close = frame.opcode == 0x8;
+                                let is_data = frame.opcode == 0x1 || frame.opcode == 0x2;
+                                let frame = if is_data {
+                                    let raw = if frame.opcode == 0x1 {
+                                        format!("→ {}", String::from_utf8_lossy(&frame.payload))
+                                    } else {
+                                        format!("→ [binary] {}", B64.encode(&frame.payload))
+                                    };
+                                    match ic.pause_ws_frame(raw).await {
+                                        Ok(Some(InterceptDecision::Forward { edited_raw })) => {
+                                            if let Some(edited) = edited_raw {
+                                                let body = edited
+                                                    .strip_prefix("→ ")
+                                                    .unwrap_or(&edited)
+                                                    .as_bytes()
+                                                    .to_vec();
+                                                WsFrame { fin: frame.fin, opcode: frame.opcode, payload: body }
+                                            } else {
+                                                frame
+                                            }
+                                        }
+                                        Ok(Some(InterceptDecision::Drop)) | Err(_) => break,
+                                        Ok(None) => frame,
+                                    }
+                                } else {
+                                    frame
+                                };
+                                let encoded = ws_encode_frame(&frame, Some([0x37, 0xfa, 0x21, 0x3d]));
+                                if uw.write_all(&encoded).await.is_err() {
+                                    break;
+                                }
+                                if is_close {
+                                    break;
+                                }
+                            }
+                        });
+                        let s2c = tokio::task::spawn_local(async move {
+                            loop {
+                                let frame = match ws_read_frame(&mut ur).await {
+                                    Ok(f) => f,
+                                    Err(_) => break,
+                                };
+                                let is_close = frame.opcode == 0x8;
+                                let encoded = ws_encode_frame(&frame, None);
+                                if cw.write_all(&encoded).await.is_err() {
+                                    break;
+                                }
+                                if is_close {
+                                    break;
+                                }
+                            }
+                        });
+                        tokio::select! {
+                            _ = c2s => {}
+                            _ = s2c => {}
+                        }
                     }
                 });
 
@@ -679,6 +730,79 @@ struct WebSocketUpstream {
 
 trait AsyncReadWrite: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T> AsyncReadWrite for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
+struct WsFrame {
+    fin: bool,
+    opcode: u8,
+    payload: Vec<u8>,
+}
+
+async fn ws_read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<WsFrame> {
+    let mut hdr = [0u8; 2];
+    reader.read_exact(&mut hdr).await?;
+    let fin = (hdr[0] & 0x80) != 0;
+    let opcode = hdr[0] & 0x0f;
+    let masked = (hdr[1] & 0x80) != 0;
+    let len7 = (hdr[1] & 0x7f) as u64;
+    let payload_len: u64 = match len7 {
+        126 => {
+            let mut b = [0u8; 2];
+            reader.read_exact(&mut b).await?;
+            u16::from_be_bytes(b) as u64
+        }
+        127 => {
+            let mut b = [0u8; 8];
+            reader.read_exact(&mut b).await?;
+            u64::from_be_bytes(b)
+        }
+        n => n,
+    };
+    if payload_len > 16 * 1024 * 1024 {
+        return Err(AppError::Other("ws frame too large".into()));
+    }
+    let masking_key = if masked {
+        let mut k = [0u8; 4];
+        reader.read_exact(&mut k).await?;
+        Some(k)
+    } else {
+        None
+    };
+    let mut payload = vec![0u8; payload_len as usize];
+    if !payload.is_empty() {
+        reader.read_exact(&mut payload).await?;
+    }
+    if let Some(k) = masking_key {
+        for (i, b) in payload.iter_mut().enumerate() {
+            *b ^= k[i & 3];
+        }
+    }
+    Ok(WsFrame { fin, opcode, payload })
+}
+
+fn ws_encode_frame(frame: &WsFrame, masking_key: Option<[u8; 4]>) -> Vec<u8> {
+    let plen = frame.payload.len();
+    let mut out = Vec::with_capacity(14 + plen);
+    out.push((if frame.fin { 0x80u8 } else { 0 }) | (frame.opcode & 0x0f));
+    let mb = if masking_key.is_some() { 0x80u8 } else { 0 };
+    if plen < 126 {
+        out.push(mb | plen as u8);
+    } else if plen <= 0xffff {
+        out.push(mb | 126);
+        out.extend_from_slice(&(plen as u16).to_be_bytes());
+    } else {
+        out.push(mb | 127);
+        out.extend_from_slice(&(plen as u64).to_be_bytes());
+    }
+    if let Some(k) = masking_key {
+        out.extend_from_slice(&k);
+        for (i, &b) in frame.payload.iter().enumerate() {
+            out.push(b ^ k[i & 3]);
+        }
+    } else {
+        out.extend_from_slice(&frame.payload);
+    }
+    out
+}
 
 impl ProxyEngine {
     async fn send_upstream(&self, req: &ProxyRequest) -> Result<ProxyResponse> {
@@ -1247,25 +1371,6 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
             rustls::SignatureScheme::RSA_PKCS1_SHA512,
         ]
     }
-}
-
-fn host_in_scope(host: &str, scope_regex: &str) -> bool {
-    let lines = scope_regex
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return false;
-    }
-    for line in lines {
-        if let Ok(re) = Regex::new(line) {
-            if re.is_match(host) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 fn resolve_target(req: &Request<Incoming>, ctx: &ConnCtx) -> Result<(String, String, String)> {

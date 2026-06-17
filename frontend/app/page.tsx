@@ -69,6 +69,9 @@ const [activeNav, setActiveNav] = useState('dashboard')
   const themeSettingRef = useRef<string>('dark-color-amoled-red')
   const interceptToggleInFlightRef = useRef(false)
   const maxHistoryItemsRef = useRef(1000)
+  // Batch ResponseReceived updates to avoid O(n) map() on every event
+  const pendingResponsesRef = useRef<Map<string, { statusCode: number; time: string; size: string }>>(new Map())
+  const responseFlushRef = useRef<number | null>(null)
   const logError = (source: string, error: unknown) => {
     const message = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error)
     clientLog('ERROR', source, message).catch(() => {})
@@ -89,6 +92,9 @@ const [activeNav, setActiveNav] = useState('dashboard')
       localStorage.setItem('skuntir:interceptQueue', JSON.stringify([item]))
     }
     window.dispatchEvent(new CustomEvent('skuntir:intercept:paused', { detail: item }))
+    if (activeNavRef.current !== 'intercept') {
+      setActiveNav('intercept')
+    }
   }
 
   useEffect(() => {
@@ -191,18 +197,29 @@ const [activeNav, setActiveNav] = useState('dashboard')
         }
 
         if (ev.type === 'ResponseReceived') {
-          setRequests((prev) =>
-            prev.map((r) =>
-              r.id === ev.payload.id
-                ? {
-                    ...r,
-                    statusCode: ev.payload.status,
-                    time: formatDurationMs(ev.payload.elapsed_ms),
-                    size: formatBytes(ev.payload.response_bytes),
-                  }
-                : r
-            )
-          )
+          pendingResponsesRef.current.set(ev.payload.id, {
+            statusCode: ev.payload.status,
+            time: formatDurationMs(ev.payload.elapsed_ms),
+            size: formatBytes(ev.payload.response_bytes),
+          })
+          if (responseFlushRef.current === null) {
+            responseFlushRef.current = window.requestAnimationFrame(() => {
+              responseFlushRef.current = null
+              const updates = pendingResponsesRef.current
+              pendingResponsesRef.current = new Map()
+              if (!updates.size) return
+              setRequests((prev) => {
+                let changed = false
+                const next = prev.map((r) => {
+                  const u = updates.get(r.id)
+                  if (!u) return r
+                  changed = true
+                  return { ...r, ...u }
+                })
+                return changed ? next : prev
+              })
+            })
+          }
         }
 
         if (ev.type === 'InterceptPaused') {

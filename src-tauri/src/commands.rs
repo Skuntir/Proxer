@@ -207,7 +207,7 @@ pub async fn settings_set(
         if status.running {
             if let Some(bind) = status.bind.and_then(|b| b.parse::<SocketAddr>().ok()) {
                 if res.system_proxy_enabled {
-                    let _ = system_proxy::enable_system_proxy(bind);
+                    system_proxy::enable_system_proxy(bind)?;
                 } else {
                     let _ = system_proxy::disable_system_proxy();
                 }
@@ -510,7 +510,7 @@ pub async fn proxy_start(
             .as_ref()
             .and_then(|b| b.parse::<SocketAddr>().ok())
         {
-            let _ = system_proxy::enable_system_proxy(bind);
+            system_proxy::enable_system_proxy(bind)?;
         }
     }
     let _ = state

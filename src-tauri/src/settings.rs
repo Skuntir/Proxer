@@ -55,7 +55,7 @@ pub struct UiSettings {
 }
 
 fn default_scope_regex() -> String {
-    "^$".into()
+    ".*".into()
 }
 
 fn default_show_examples() -> bool {
@@ -120,7 +120,7 @@ impl Default for UiSettings {
             mcp_enabled: false,
             mcp_port: default_mcp_port(),
             show_connect_tunnels: false,
-            scope_regex: "^$".into(),
+            scope_regex: ".*".into(),
             system_proxy_enabled: false,
         }
     }

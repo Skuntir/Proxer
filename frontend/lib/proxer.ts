@@ -542,11 +542,11 @@ export async function interceptSetEnabled(enabled: boolean): Promise<boolean> {
 }
 
 export async function interceptForward(interceptionId: string, editedRaw?: string): Promise<void> {
-  return invoke<void>('intercept_forward', { interception_id: interceptionId, edited_raw: editedRaw })
+  return invoke<void>('intercept_forward', { interceptionId, editedRaw })
 }
 
 export async function interceptDrop(interceptionId: string): Promise<void> {
-  return invoke<void>('intercept_drop', { interception_id: interceptionId })
+  return invoke<void>('intercept_drop', { interceptionId })
 }
 
 const backendEventHandlers = new Set<(ev: BackendEvent) => void>()

@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# Hi this is kimmy and you are hopefully reading this before running it.
+# If you ran it first, it's totally harmless--but you didn't know that!
+# Don't pipe things from the internet directly to bash.
+# I don't care which vendors/projects tell you to. Just don't.
+# (Looking at you rust-lang.org!!)
+# This was dreamed up and created on a single lunch break so I might make it
+# better at some point if I feel like it--or make it malicious. ↶(*｀∇´)oΨ
+# Here's the code if you want to see it: https://github.com/kimmydotzip/kimmy.sh
+# Find me on BlueSky (@kimmy.zip) or the stupid platform (@kimmydotzip)
+# Have a nice day!
+
+# $PS1 isn't accessible in a subshell, so we're doing a Neat Trick™ so we can
+# fake out the prompt
+PROMPT=$(bash --login -i -c 'echo "${PS1@P}"' 2>/dev/null)
+
+# scary stuff! don't accidentally a word here
+echo -e "${PROMPT}rm -rf --no-preserve-root /"
+
+# idk, feels right
+sleep 0.25
+
+# took this from a real-world oopsie (not mine)
+echo "rm: cannot remove '/boot/grub': Device or resource busy
+rm: cannot remove '/dev/mqueue': Device or resource busy
+rm: cannot remove '/dev/hugepages': Device or resource busy
+rm: cannot remove '/dev/shm': Device or resource busy
+rm: cannot remove '/dev/pts/3': Operation not permitted
+rm: cannot remove '/dev/pts/2': Operation not permitted
+rm: cannot remove '/dev/pts/1': Operation not permitted
+rm: cannot remove '/dev/pts/0': Operation not permitted
+rm: cannot remove '/dev/pts/ptmx': Operation not permitted
+rm: cannot remove '/etc/exports.d': Operation not permitted"
+
+# you get a full second to think about what you've done ಠ_ಠ
+sleep 1
+
+# get some real stuffs with find
+proc_list=($(find /proc/sys -type f -maxdepth 4 2>/dev/null))
+
+for file in "${proc_list[@]}"; do
+    echo "rm: cannot remove '$file': Permission denied"
+done
+
+# computers are slower than this
+sleep 0.25
+
+# more real stuffs
+sys_list=($(find /sys -type f -maxdepth 3 2>/dev/null))
+
+for file in "${sys_list[@]}"; do
+    echo "rm: cannot remove '$file': Operation not permitted"
+done
+
+# if you haven't ctrl^c by now... I guess you get to see it end. ¯\(°_o)/¯
+sleep 5
+
+# letting this run is a fail
+exit 1
